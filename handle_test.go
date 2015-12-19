@@ -207,6 +207,38 @@ func TestServe_GCSErrors(t *testing.T) {
 	}
 }
 
+func TestServe_NoTrailSlash(t *testing.T) {
+	ti, err := aetest.NewInstance(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ti.Close()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bucket/dir/index.html" {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+	gcsBase = ts.URL
+	// overwrite global config
+	config.Buckets = map[string]string{"default": "bucket"}
+
+	req, _ := ti.NewRequest("GET", "/dir", nil)
+	// make sure we're not getting memcached results
+	if err := memcache.Flush(appengine.NewContext(req)); err != nil {
+		t.Fatal(err)
+	}
+	res := httptest.NewRecorder()
+	http.DefaultServeMux.ServeHTTP(res, req)
+	if res.Code != http.StatusMovedPermanently {
+		t.Errorf("res.Code = %d; want %d", res.Code, http.StatusMovedPermanently)
+	}
+	loc := "/dir/"
+	if v := res.Header().Get("location"); v != loc {
+		t.Errorf("location = %q; want %q", v, loc)
+	}
+}
+
 func TestHook(t *testing.T) {
 	ti, err := aetest.NewInstance(nil)
 	if err != nil {

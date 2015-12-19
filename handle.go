@@ -17,7 +17,6 @@ package weasel
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/log"
@@ -46,16 +45,12 @@ func init() {
 // The bucket is identifed by matching r.Host against config.Buckets map keys.
 // Default bucket is used if no match is found.
 func serveObject(w http.ResponseWriter, r *http.Request) {
-	obj := r.URL.Path[1:]
-	if obj == "" || strings.HasSuffix(obj, "/") {
-		obj += defaultIndex
-	}
-	// fetch and serve the object
 	ctx := appengine.NewContext(r)
 	bucket := bucketForHost(r.Host)
-	o, err := getObject(ctx, bucket, obj)
+	oname := r.URL.Path[1:]
+	o, err := getFile(ctx, bucket, oname)
 	if err != nil {
-		log.Errorf(ctx, "%s/%s: %v", bucket, obj, err)
+		log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
 		code := http.StatusInternalServerError
 		if errf, ok := err.(*fetchError); ok {
 			code = errf.code
@@ -63,11 +58,15 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 		serveError(w, code, "")
 		return
 	}
+	if v := o.redirect(); v != "" {
+		http.Redirect(w, r, v, o.redirectCode())
+		return
+	}
 	for k, v := range o.Meta {
 		w.Header().Set(k, v)
 	}
 	if _, err := w.Write(o.Body); err != nil {
-		log.Errorf(ctx, "%s/%s: %v", bucket, obj, err)
+		log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
 	}
 }
 

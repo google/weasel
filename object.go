@@ -19,6 +19,9 @@ import (
 	"io/ioutil"
 	"net/http"
 	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/net/context"
@@ -32,6 +35,10 @@ import (
 const (
 	scopeStorageRead  = "https://www.googleapis.com/auth/devstorage.read_only"
 	scopeStorageOwner = "https://www.googleapis.com/auth/devstorage.full_control"
+
+	// object custom metadata
+	metaRedirect     = "x-goog-meta-redirect"
+	metaRedirectCode = "x-goog-meta-redirect-code"
 )
 
 var (
@@ -59,6 +66,56 @@ var (
 type object struct {
 	Meta map[string]string
 	Body []byte
+}
+
+func (o *object) redirect() string {
+	return o.Meta[metaRedirect]
+}
+
+func (o *object) redirectCode() int {
+	c, err := strconv.Atoi(o.Meta[metaRedirectCode])
+	if err != nil {
+		c = http.StatusMovedPermanently
+	}
+	return c
+}
+
+// getFile abstracts getObject and treats object name like a file path.
+func getFile(ctx context.Context, bucket, name string) (*object, error) {
+	if name == "" || strings.HasSuffix(name, "/") {
+		name += defaultIndex
+	}
+
+	// try /dir/index.html if name is /dir, concurrently
+	var (
+		odir    *object
+		odirErr error
+		donec   = make(chan struct{})
+	)
+	idxname := path.Join(name, defaultIndex)
+	if !strings.HasSuffix(name, defaultIndex) && filepath.Ext(name) == "" {
+		go func() {
+			odir, odirErr = getObject(ctx, bucket, idxname)
+			close(donec)
+		}()
+	}
+
+	// get the original object meanwhile
+	o, err := getObject(ctx, bucket, name)
+	if err != nil {
+		// check for /dir/index.html
+		<-donec
+		if odirErr != nil || odir == nil {
+			// it's not a "directory" either; return the original error
+			return nil, err
+		}
+		o = &object{Meta: map[string]string{
+			metaRedirect: idxname[:len(idxname)-len(defaultIndex)],
+		}}
+		err = nil
+	}
+
+	return o, err
 }
 
 // getObject retrieves GCS object obj of the bucket from cache or network.
