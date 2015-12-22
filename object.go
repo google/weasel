@@ -111,20 +111,24 @@ func getFile(ctx context.Context, bucket, name string) (*object, error) {
 
 	// get the original object meanwhile
 	o, err := getObject(ctx, bucket, name)
-	if err != nil {
-		// check for /dir/index.html
-		<-donec
-		if odirErr != nil || odir == nil {
-			// it's not a "directory" either; return the original error
-			return nil, err
-		}
-		o = &object{Meta: map[string]string{
-			metaRedirect: idxname[:len(idxname)-len(defaultIndex)],
-		}}
-		err = nil
+	if err == nil {
+		return o, nil
+	}
+	// return non-404 errors right away
+	if ferr, ok := err.(*fetchError); ok && ferr.code != http.StatusNotFound {
+		return nil, err
 	}
 
-	return o, err
+	// check for /dir/index.html
+	<-donec
+	if odirErr != nil || odir == nil {
+		// it's not a "directory" either; return the original error
+		return nil, err
+	}
+	o = &object{Meta: map[string]string{
+		metaRedirect: "/" + idxname[:len(idxname)-len(defaultIndex)],
+	}}
+	return o, nil
 }
 
 // getObject retrieves GCS object obj of the bucket from cache or network.

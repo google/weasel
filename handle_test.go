@@ -222,7 +222,7 @@ func TestServe_NoTrailSlash(t *testing.T) {
 	}
 	defer ti.Close()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/bucket/dir/index.html" {
+		if r.URL.Path != "/bucket/dir-one/two/index.html" {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
@@ -231,7 +231,7 @@ func TestServe_NoTrailSlash(t *testing.T) {
 	// overwrite global config
 	config.Buckets = map[string]string{"default": "bucket"}
 
-	req, _ := ti.NewRequest("GET", "/dir", nil)
+	req, _ := ti.NewRequest("GET", "/dir-one/two", nil)
 	// make sure we're not getting memcached results
 	if err := memcache.Flush(appengine.NewContext(req)); err != nil {
 		t.Fatal(err)
@@ -241,7 +241,7 @@ func TestServe_NoTrailSlash(t *testing.T) {
 	if res.Code != http.StatusMovedPermanently {
 		t.Errorf("res.Code = %d; want %d", res.Code, http.StatusMovedPermanently)
 	}
-	loc := "/dir/"
+	loc := "/dir-one/two/"
 	if v := res.Header().Get("location"); v != loc {
 		t.Errorf("location = %q; want %q", v, loc)
 	}

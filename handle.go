@@ -50,20 +50,26 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r)
 	bucket := bucketForHost(r.Host)
 	oname := r.URL.Path[1:]
+
 	o, err := getFile(ctx, bucket, oname)
 	if err != nil {
-		log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
 		code := http.StatusInternalServerError
 		if errf, ok := err.(*fetchError); ok {
 			code = errf.code
 		}
 		serveError(w, code, "")
+
+		if code != http.StatusNotFound {
+			log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
+		}
 		return
 	}
+
 	if v := o.redirect(); v != "" {
 		http.Redirect(w, r, v, o.redirectCode())
 		return
 	}
+
 	for k, v := range o.Meta {
 		w.Header().Set(k, v)
 	}
