@@ -258,7 +258,7 @@ func TestHook(t *testing.T) {
 	req, _ := ti.NewRequest("POST", "/-/hook/gcs", strings.NewReader(body))
 
 	ctx := appengine.NewContext(req)
-	key := objectCacheKey("dummy", "path/obj")
+	key := objectCacheKey(ctx, "dummy", "path/obj")
 	item := &memcache.Item{Key: key, Value: []byte("ignored")}
 	if err := memcache.Set(ctx, item); err != nil {
 		t.Fatal(err)
@@ -279,6 +279,6 @@ func TestHook(t *testing.T) {
 	res = httptest.NewRecorder()
 	http.DefaultServeMux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
-		t.Errorf("res.Code = %d; want %d", http.StatusOK)
+		t.Errorf("res.Code = %d; want %d", res.Code, http.StatusOK)
 	}
 }

@@ -22,7 +22,6 @@ import (
 
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/log"
-	"google.golang.org/appengine/memcache"
 )
 
 const (
@@ -87,20 +86,19 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := newContext(r)
+	// this is not a client request, so don't use newContext.
+	ctx := appengine.NewContext(r)
 	// we only care about name and the bucket
 	body := struct{ Name, Bucket string }{}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		log.Errorf(ctx, "json.Decode: %v", err.Error())
 		return
 	}
-	err := removeObjectCache(ctx, body.Bucket, body.Name)
-	if err == nil || err == memcache.ErrCacheMiss {
-		return
+	if err := removeObjectCache(ctx, body.Bucket, body.Name); err != nil {
+		log.Errorf(ctx, "removeObjectCache: %v", err)
+		// let GCS retry
+		w.WriteHeader(http.StatusInternalServerError)
 	}
-	log.Errorf(ctx, "removeObjectCache: %v", err)
-	// let GCS retry if cache invalidation was unsuccessful
-	w.WriteHeader(http.StatusInternalServerError)
 }
 
 func serveError(w http.ResponseWriter, code int, msg string) {
@@ -142,6 +140,8 @@ const (
 	headerKey // in-flight request headers
 )
 
+// newContext creates a new context from a client in-flight request.
+// It should not be used for server-to-server, such as web hooks.
 func newContext(r *http.Request) context.Context {
 	c := appengine.NewContext(r)
 	return context.WithValue(c, headerKey, r.Header)
