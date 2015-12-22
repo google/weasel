@@ -60,6 +60,15 @@ var (
 		"access-control-max-age",
 		"access-control-expose-headers",
 	}
+
+	// userHeaders are propagated from client to GCS when fetching an object.
+	// They must be in canonical form.
+	userHeaders = []string{
+		"Accept",
+		"Accept-Encoding",
+		"Accept-Language",
+		"User-Agent",
+	}
 )
 
 // object represents a single GCS object.
@@ -152,7 +161,14 @@ func getObject(ctx context.Context, bucket, obj string) (*object, error) {
 // with an error code.
 func fetchObject(ctx context.Context, bucket, obj string) (*object, error) {
 	u := fmt.Sprintf("%s/%s/%s", gcsBase, bucket, obj)
-	res, err := httpClient(ctx, scopeStorageOwner).Get(u)
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if h, ok := ctx.Value(headerKey).(http.Header); ok {
+		addUserHeaders(req, h)
+	}
+	res, err := httpClient(ctx, scopeStorageOwner).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +191,15 @@ func fetchObject(ctx context.Context, bucket, obj string) (*object, error) {
 		}
 	}
 	return o, nil
+}
+
+// addUserHeaders sets headers on r from h, for all elements of userHeaders.
+func addUserHeaders(r *http.Request, h http.Header) {
+	for _, k := range userHeaders {
+		if v, ok := h[k]; ok {
+			r.Header[k] = v
+		}
+	}
 }
 
 // removeObjectCache removes cached object from memcache.

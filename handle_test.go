@@ -95,6 +95,12 @@ func TestServe_DefaultGCS(t *testing.T) {
 		if v := r.Header.Get("authorization"); !strings.HasPrefix(v, authorization) {
 			t.Errorf("auth = %q; want prefix %q", v, authorization)
 		}
+		if v := r.Header.Get("accept"); v != "client/accept" {
+			t.Errorf("accept = %q; want 'client/accept'", v)
+		}
+		if v, exist := r.Header["X-Foo"]; exist {
+			t.Errorf("found x-foo: %q", v)
+		}
 		w.Header().Set("cache-control", cacheControl)
 		w.Header().Set("content-type", contentType)
 		w.Header().Set("x-test", "should not propagate")
@@ -104,6 +110,8 @@ func TestServe_DefaultGCS(t *testing.T) {
 	gcsBase = ts.URL
 
 	req, _ := ti.NewRequest("GET", reqFile, nil)
+	req.Header.Set("accept", "client/accept")
+	req.Header.Set("x-foo", "bar")
 	// make sure we're not getting memcached results
 	if err := memcache.Flush(appengine.NewContext(req)); err != nil {
 		t.Fatal(err)

@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"golang.org/x/net/context"
+
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/memcache"
@@ -45,7 +47,7 @@ func init() {
 // The bucket is identifed by matching r.Host against config.Buckets map keys.
 // Default bucket is used if no match is found.
 func serveObject(w http.ResponseWriter, r *http.Request) {
-	ctx := appengine.NewContext(r)
+	ctx := newContext(r)
 	bucket := bucketForHost(r.Host)
 	oname := r.URL.Path[1:]
 	o, err := getFile(ctx, bucket, oname)
@@ -79,7 +81,7 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := appengine.NewContext(r)
+	ctx := newContext(r)
 	// we only care about name and the bucket
 	body := struct{ Name, Bucket string }{}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -123,4 +125,18 @@ func bucketForHost(host string) string {
 		return b
 	}
 	return config.Buckets["default"]
+}
+
+// ctxKey is a context value key
+type ctxKey int
+
+const (
+	_ ctxKey = iota // ignore 0
+
+	headerKey // in-flight request headers
+)
+
+func newContext(r *http.Request) context.Context {
+	c := appengine.NewContext(r)
+	return context.WithValue(c, headerKey, r.Header)
 }
