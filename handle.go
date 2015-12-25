@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/net/context"
 
@@ -178,5 +179,7 @@ const (
 func newContext(r *http.Request) context.Context {
 	c := appengine.NewContext(r)
 	c = context.WithValue(c, headerKey, r.Header)
-	return context.WithValue(c, methodKey, r.Method)
+	c = context.WithValue(c, methodKey, r.Method)
+	c, _ = context.WithTimeout(c, 10*time.Second)
+	return c
 }
