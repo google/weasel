@@ -56,26 +56,9 @@ var (
 	objectHeaders = []string{
 		"cache-control",
 		"content-disposition",
-		"content-md5",
 		"content-type",
 		"etag",
 		"last-modified",
-		// CORS
-		"access-control-allow-methods",
-		"access-control-allow-origin",
-		"access-control-allow-headers",
-		"access-control-allow-credentials",
-		"access-control-max-age",
-		"access-control-expose-headers",
-	}
-
-	// userHeaders are propagated from client to GCS when fetching an object.
-	// They must be in canonical form.
-	userHeaders = []string{
-		"If-Modified-Since",
-		"If-None-Match",
-		"Origin",
-		"User-Agent",
 	}
 )
 
@@ -153,20 +136,14 @@ func getFile(ctx context.Context, bucket, name string) (*object, error) {
 // from this function.
 func getObject(ctx context.Context, bucket, obj string) (*object, error) {
 	key := path.Join(bucket, obj)
-	cache := useCache(ctx)
-	if cache {
-		if o, err := getObjectCache(ctx, key); err == nil {
-			return o, nil
+	o, err := getObjectCache(ctx, key)
+	if err != nil {
+		o, err = fetchObject(ctx, bucket, obj)
+		if err == nil {
+			putObjectCache(ctx, key, o)
 		}
 	}
-	o, err := fetchObject(ctx, bucket, obj)
-	if err != nil {
-		return nil, err
-	}
-	if cache {
-		putObjectCache(ctx, key, o)
-	}
-	return o, nil
+	return o, err
 }
 
 // statObject is similar to fetchObject except the returned object.Body
@@ -209,9 +186,6 @@ func fetchObject(ctx context.Context, bucket, obj string) (*object, error) {
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		return nil, err
-	}
-	if h, ok := ctx.Value(headerKey).(http.Header); ok {
-		addUserHeaders(req, h)
 	}
 	res, err := httpClient(ctx, scopeStorageRead).Do(req)
 	if err != nil {
@@ -278,24 +252,6 @@ func removeObjectCache(ctx context.Context, bucket, obj string) error {
 	return err
 }
 
-// useCache reports whether the in-flight request associated with ctx
-// can be responded to with a cached version of an object.
-//
-// It returns false if either "Range", "Origin" or any of conditional headers
-// are present in the request.
-func useCache(ctx context.Context) bool {
-	h, ok := ctx.Value(headerKey).(http.Header)
-	if !ok {
-		return true
-	}
-	for k := range h {
-		if k == "Range" || k == "Origin" || strings.HasPrefix(k, "If-") {
-			return false
-		}
-	}
-	return true
-}
-
 // httpClient returns an authenticated http client, suitable for App Engine.
 func httpClient(c context.Context, scopes ...string) *http.Client {
 	t := &oauth2.Transport{
@@ -303,15 +259,6 @@ func httpClient(c context.Context, scopes ...string) *http.Client {
 		Base:   &urlfetch.Transport{Context: c},
 	}
 	return &http.Client{Transport: t}
-}
-
-// addUserHeaders sets headers on r from h, for all elements of userHeaders.
-func addUserHeaders(r *http.Request, h http.Header) {
-	for _, k := range userHeaders {
-		if v, ok := h[k]; ok {
-			r.Header[k] = v
-		}
-	}
 }
 
 type fetchError struct {

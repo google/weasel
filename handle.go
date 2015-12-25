@@ -92,9 +92,6 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 		h.Set(k, v)
 	}
 	h.Set("allow", allowMethodsStr)
-	if _, ok := h["Access-Control-Allow-Origin"]; ok {
-		h.Set("access-control-allow-methods", allowMethodsStr)
-	}
 	// body, but only if GET request
 	if r.Method == "GET" {
 		_, err := w.Write(o.Body)
@@ -164,22 +161,10 @@ func bucketForHost(host string) string {
 	return config.Buckets["default"]
 }
 
-// ctxKey is a context value key
-type ctxKey int
-
-const (
-	_ ctxKey = iota // ignore 0
-
-	headerKey // in-flight request headers
-	methodKey // HTTP verb, e.g. "GET"
-)
-
 // newContext creates a new context from a client in-flight request.
 // It should not be used for server-to-server, such as web hooks.
 func newContext(r *http.Request) context.Context {
 	c := appengine.NewContext(r)
-	c = context.WithValue(c, headerKey, r.Header)
-	c = context.WithValue(c, methodKey, r.Method)
 	c, _ = context.WithTimeout(c, 10*time.Second)
 	return c
 }
