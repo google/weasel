@@ -43,7 +43,7 @@ func TestRedirect(t *testing.T) {
 	defer ti.Close()
 
 	const (
-		redirectTo = "http://www.code-labs.io"
+		redirectTo = "https://www.example.com"
 		code       = http.StatusFound
 	)
 	handler := redirectHandler(redirectTo, code)
@@ -54,7 +54,7 @@ func TestRedirect(t *testing.T) {
 			t.Errorf("%s: %v", u, err)
 			continue
 		}
-		req.Host = "code-labs.io"
+		req.Host = "example.org"
 		res := httptest.NewRecorder()
 		handler.ServeHTTP(res, req)
 		if res.Code != code {
@@ -68,6 +68,12 @@ func TestRedirect(t *testing.T) {
 }
 
 func TestServe_DefaultGCS(t *testing.T) {
+	ti, err := aetest.NewInstance(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ti.Close()
+
 	const (
 		bucket       = "default-bucket"
 		reqFile      = "/dir/"
@@ -76,18 +82,9 @@ func TestServe_DefaultGCS(t *testing.T) {
 		contents     = "contents"
 		cacheControl = "public,max-age=0"
 		// dev_appserver app identity stub
-		authorization = "Bearer InvalidToken:" + scopeStorageOwner
+		authorization = "Bearer InvalidToken:" + scopeStorageRead
 	)
-	// overwrite global config
-	config.Buckets = map[string]string{
-		"default": bucket,
-	}
 
-	ti, err := aetest.NewInstance(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ti.Close()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path[1:] != realFile {
 			t.Errorf("r.URL.Path = %q; want /%s", r.URL.Path, realFile)
@@ -95,11 +92,12 @@ func TestServe_DefaultGCS(t *testing.T) {
 		if v := r.Header.Get("authorization"); !strings.HasPrefix(v, authorization) {
 			t.Errorf("auth = %q; want prefix %q", v, authorization)
 		}
-		if v := r.Header.Get("accept"); v != "client/accept" {
-			t.Errorf("accept = %q; want 'client/accept'", v)
-		}
 		if v, exist := r.Header["X-Foo"]; exist {
 			t.Errorf("found x-foo: %q", v)
+		}
+		// weasel client => GCS always uses gzip where available
+		if v := r.Header.Get("accept-encoding"); v != "gzip" {
+			t.Errorf("accept-encoding = %q; want 'gzip'", v)
 		}
 		w.Header().Set("cache-control", cacheControl)
 		w.Header().Set("content-type", contentType)
@@ -108,9 +106,10 @@ func TestServe_DefaultGCS(t *testing.T) {
 	}))
 	defer ts.Close()
 	gcsBase = ts.URL
+	config.Buckets = map[string]string{"default": bucket}
 
 	req, _ := ti.NewRequest("GET", reqFile, nil)
-	req.Header.Set("accept", "client/accept")
+	req.Header.Set("accept-encoding", "client/accept")
 	req.Header.Set("x-foo", "bar")
 	// make sure we're not getting memcached results
 	if err := memcache.Flush(appengine.NewContext(req)); err != nil {
@@ -136,7 +135,55 @@ func TestServe_DefaultGCS(t *testing.T) {
 	}
 }
 
+func TestServe_Methods(t *testing.T) {
+	ti, err := aetest.NewInstance(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ti.Close()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/plain")
+		w.Write([]byte("methods test"))
+	}))
+	defer ts.Close()
+	gcsBase = ts.URL
+	config.Buckets = map[string]string{"default": "bucket"}
+
+	tests := []struct {
+		method, body string
+		code         int
+	}{
+		{"HEAD", "", http.StatusOK},
+		{"OPTIONS", "", http.StatusOK},
+		// it is important that GET comes last to verify requests like HEAD
+		// do not corrupt object cache
+		{"GET", "methods test", http.StatusOK},
+
+		{"PUT", "", http.StatusMethodNotAllowed},
+		{"POST", "", http.StatusMethodNotAllowed},
+		{"DELETE", "", http.StatusMethodNotAllowed},
+	}
+	for i, test := range tests {
+		r, _ := ti.NewRequest(test.method, "/file.txt", nil)
+		rw := httptest.NewRecorder()
+		http.DefaultServeMux.ServeHTTP(rw, r)
+		if rw.Code != test.code {
+			t.Errorf("%d: rw.Code = %d; want %d", i, rw.Code, test.code)
+		}
+		if v := strings.TrimSpace(rw.Body.String()); v != test.body {
+			t.Errorf("%d: rw.Body = %q; want %q", i, v, test.body)
+		}
+	}
+}
+
 func TestServe_Memcache(t *testing.T) {
+	ti, err := aetest.NewInstance(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ti.Close()
+
 	const (
 		bucket       = "default-bucket"
 		reqFile      = "/index.html"
@@ -145,10 +192,9 @@ func TestServe_Memcache(t *testing.T) {
 		contents     = "cached file"
 		cacheControl = "public,max-age=10"
 	)
-	// overwrite global config
-	config.Buckets = map[string]string{
-		"default": bucket,
-	}
+
+	req, _ := ti.NewRequest("GET", reqFile, nil)
+	ctx := appengine.NewContext(req)
 	obj := &object{
 		Meta: map[string]string{
 			"content-type":  contentType,
@@ -156,27 +202,18 @@ func TestServe_Memcache(t *testing.T) {
 		},
 		Body: []byte(contents),
 	}
-
-	ti, err := aetest.NewInstance(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ti.Close()
-
-	req, _ := ti.NewRequest("GET", reqFile, nil)
-	ctx := appengine.NewContext(req)
-	item := memcache.Item{
-		Key:    realFile,
-		Object: obj,
-	}
+	item := memcache.Item{Key: realFile, Object: obj}
 	if err := memcache.Gob.Set(ctx, &item); err != nil {
 		t.Fatal(err)
 	}
 
-	gcsBase = "invalid" // make sure we don't hit real GCS
+	// make sure we don't hit real GCS
+	gcsBase = "invalid"
+	// overwrite global config
+	config.Buckets = map[string]string{"default": bucket}
+
 	res := httptest.NewRecorder()
 	http.DefaultServeMux.ServeHTTP(res, req)
-
 	if res.Code != http.StatusOK {
 		t.Errorf("res.Code = %d; want %d", res.Code, http.StatusOK)
 	}
@@ -192,12 +229,13 @@ func TestServe_Memcache(t *testing.T) {
 }
 
 func TestServe_GCSErrors(t *testing.T) {
-	const code = http.StatusBadRequest
 	ti, err := aetest.NewInstance(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ti.Close()
+
+	const code = http.StatusBadRequest
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(code)
 	}))
@@ -221,14 +259,19 @@ func TestServe_NoTrailSlash(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ti.Close()
+
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/bucket/dir-one/two/index.html" {
 			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		// stat request
+		if r.Method != "HEAD" {
+			t.Errorf("r.Method = %q; want HEAD", r.Method)
 		}
 	}))
 	defer ts.Close()
 	gcsBase = ts.URL
-	// overwrite global config
 	config.Buckets = map[string]string{"default": "bucket"}
 
 	req, _ := ti.NewRequest("GET", "/dir-one/two", nil)
@@ -257,9 +300,9 @@ func TestHook(t *testing.T) {
 	body := `{"bucket": "dummy", "name": "path/obj"}`
 	req, _ := ti.NewRequest("POST", "/-/hook/gcs", strings.NewReader(body))
 
+	const cacheKey = "dummy/path/obj"
 	ctx := appengine.NewContext(req)
-	key := objectCacheKey(ctx, "dummy", "path/obj")
-	item := &memcache.Item{Key: key, Value: []byte("ignored")}
+	item := &memcache.Item{Key: cacheKey, Value: []byte("ignored")}
 	if err := memcache.Set(ctx, item); err != nil {
 		t.Fatal(err)
 	}
@@ -270,8 +313,8 @@ func TestHook(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Errorf("res.Code = %d; want %d", res.Code, http.StatusOK)
 	}
-	if _, err := memcache.Get(ctx, key); err != memcache.ErrCacheMiss {
-		t.Fatalf("memcache.Get(%q): %v; want ErrCacheMiss", key, err)
+	if _, err := memcache.Get(ctx, cacheKey); err != memcache.ErrCacheMiss {
+		t.Fatalf("memcache.Get(%q): %v; want ErrCacheMiss", cacheKey, err)
 	}
 
 	// cache misses must not respond with an error code

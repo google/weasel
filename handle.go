@@ -17,6 +17,8 @@ package weasel
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
+	"strings"
 
 	"golang.org/x/net/context"
 
@@ -24,10 +26,18 @@ import (
 	"google.golang.org/appengine/log"
 )
 
-const (
-	// defaultIndex is the trailing part of GCS object name
-	// when none is specified in an in-flight request.
-	defaultIndex = "index.html"
+var (
+	// allowMethods is a slice of allow methods when requesting a GCS object.
+	// The slice must be sorted in lexical order.
+	allowMethods = []string{
+		"GET",
+		"HEAD",
+		"OPTIONS",
+	}
+
+	// allowMethodsStr is allowMethods in a single string version,
+	// suitable for Allow or CORS allow methods header.
+	allowMethodsStr = strings.Join(allowMethods, ", ")
 )
 
 func init() {
@@ -45,7 +55,14 @@ func init() {
 // listed in objectHeaders.
 // The bucket is identifed by matching r.Host against config.Buckets map keys.
 // Default bucket is used if no match is found.
+//
+// Only GET, HEAD and OPTIONS methods are allowed.
 func serveObject(w http.ResponseWriter, r *http.Request) {
+	if !validMethod(r.Method) {
+		http.Error(w, "", http.StatusMethodNotAllowed)
+		return
+	}
+
 	ctx := newContext(r)
 	bucket := bucketForHost(r.Host)
 	oname := r.URL.Path[1:]
@@ -57,7 +74,6 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 			code = errf.code
 		}
 		serveError(w, code, "")
-
 		if code != http.StatusNotFound {
 			log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
 		}
@@ -69,11 +85,21 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// headers
+	h := w.Header()
 	for k, v := range o.Meta {
-		w.Header().Set(k, v)
+		h.Set(k, v)
 	}
-	if _, err := w.Write(o.Body); err != nil {
-		log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
+	h.Set("allow", allowMethodsStr)
+	if _, ok := h["Access-Control-Allow-Origin"]; ok {
+		h.Set("access-control-allow-methods", allowMethodsStr)
+	}
+	// body, but only if GET request
+	if r.Method == "GET" {
+		_, err := w.Write(o.Body)
+		if err != nil {
+			log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
+		}
 	}
 }
 
@@ -122,6 +148,12 @@ func redirectHandler(url string, code int) http.Handler {
 	})
 }
 
+// validMethod reports whether allowMethods contains m.
+func validMethod(m string) bool {
+	i := sort.SearchStrings(allowMethods, m)
+	return i < len(allowMethods) && allowMethods[i] == m
+}
+
 // bucketForHost returns a bucket name mapped to the host.
 // Default bucket name is return if no match found.
 func bucketForHost(host string) string {
@@ -138,11 +170,13 @@ const (
 	_ ctxKey = iota // ignore 0
 
 	headerKey // in-flight request headers
+	methodKey // HTTP verb, e.g. "GET"
 )
 
 // newContext creates a new context from a client in-flight request.
 // It should not be used for server-to-server, such as web hooks.
 func newContext(r *http.Request) context.Context {
 	c := appengine.NewContext(r)
-	return context.WithValue(c, headerKey, r.Header)
+	c = context.WithValue(c, headerKey, r.Header)
+	return context.WithValue(c, methodKey, r.Method)
 }

@@ -27,19 +27,23 @@ import (
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
-	"google.golang.org/appengine"
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/memcache"
 	"google.golang.org/appengine/urlfetch"
 )
 
 const (
-	scopeStorageRead  = "https://www.googleapis.com/auth/devstorage.read_only"
-	scopeStorageOwner = "https://www.googleapis.com/auth/devstorage.full_control"
+	// defaultIndex is the trailing part of GCS object name
+	// when none is specified in an in-flight request.
+	defaultIndex = "index.html"
 
 	// object custom metadata
 	metaRedirect     = "x-goog-meta-redirect"
 	metaRedirectCode = "x-goog-meta-redirect-code"
+
+	// GCS OAuth2 scopes
+	scopeStorageRead  = "https://www.googleapis.com/auth/devstorage.read_only"
+	scopeStorageOwner = "https://www.googleapis.com/auth/devstorage.full_control"
 )
 
 var (
@@ -52,7 +56,6 @@ var (
 		"accept-ranges",
 		"cache-control",
 		"content-disposition",
-		"content-encoding",
 		"content-md5",
 		"content-range",
 		"content-type",
@@ -62,8 +65,8 @@ var (
 		"last-modified",
 		"retry-after",
 		// CORS
-		"access-control-allow-origin",
 		"access-control-allow-methods",
+		"access-control-allow-origin",
 		"access-control-allow-headers",
 		"access-control-allow-credentials",
 		"access-control-max-age",
@@ -73,13 +76,12 @@ var (
 	// userHeaders are propagated from client to GCS when fetching an object.
 	// They must be in canonical form.
 	userHeaders = []string{
-		"Accept",
-		"Accept-Encoding",
 		"If-Modified-Since",
 		"If-None-Match",
 		"If-Range",
-		"User-Agent",
+		"Origin",
 		"Range",
+		"User-Agent",
 	}
 )
 
@@ -107,16 +109,16 @@ func getFile(ctx context.Context, bucket, name string) (*object, error) {
 		name += defaultIndex
 	}
 
-	// try /dir/index.html if name is /dir, concurrently
+	// stat /dir/index.html if name is /dir, concurrently
 	var (
-		odir    *object
-		odirErr error
+		stat    *object
+		statErr error
 		donec   = make(chan struct{})
 	)
 	idxname := path.Join(name, defaultIndex)
 	if !strings.HasSuffix(name, defaultIndex) && filepath.Ext(name) == "" {
 		go func() {
-			odir, odirErr = getObject(ctx, bucket, idxname)
+			stat, statErr = statObject(ctx, bucket, idxname)
 			close(donec)
 		}()
 	}
@@ -133,25 +135,26 @@ func getFile(ctx context.Context, bucket, name string) (*object, error) {
 
 	// check for /dir/index.html
 	<-donec
-	if odirErr != nil || odir == nil {
+	if statErr != nil || stat == nil {
 		// it's not a "directory" either; return the original error
 		return nil, err
 	}
-	o = &object{Meta: map[string]string{
-		metaRedirect: "/" + idxname[:len(idxname)-len(defaultIndex)],
-	}}
-	return o, nil
+	if stat.redirect() == "" {
+		stat = &object{Meta: map[string]string{
+			metaRedirect: "/" + idxname[:len(idxname)-len(defaultIndex)],
+		}}
+	}
+	return stat, nil
 }
 
 // getObject retrieves GCS object obj of the bucket from cache or network.
 // Objects fetched from the network are cached before returning
 // from this function.
 func getObject(ctx context.Context, bucket, obj string) (*object, error) {
-	var cacheKey string
+	key := path.Join(bucket, obj)
 	cache := useCache(ctx)
 	if cache {
-		cacheKey = objectCacheKey(ctx, bucket, obj)
-		if o, err := getObjectCache(ctx, cacheKey); err == nil {
+		if o, err := getObjectCache(ctx, key); err == nil {
 			return o, nil
 		}
 	}
@@ -160,7 +163,7 @@ func getObject(ctx context.Context, bucket, obj string) (*object, error) {
 		return nil, err
 	}
 	if cache {
-		putObjectCache(ctx, cacheKey, o)
+		putObjectCache(ctx, key, o)
 	}
 	return o, nil
 }
@@ -170,7 +173,7 @@ func getObjectCache(ctx context.Context, key string) (*object, error) {
 	o := &object{}
 	_, err := memcache.Gob.Get(ctx, key, o)
 	if err != nil && err != memcache.ErrCacheMiss {
-		log.Errorf(ctx, "memcache.Get(%q): %v", key, err)
+		log.Errorf(ctx, "memcache.Gob.Get(%q): %v", key, err)
 	}
 	return o, err
 }
@@ -184,7 +187,7 @@ func putObjectCache(ctx context.Context, key string, o *object) error {
 	}
 	err := memcache.Gob.Set(ctx, &item)
 	if err != nil {
-		log.Errorf(ctx, "memcache.Set(%q): %v", key, err)
+		log.Errorf(ctx, "memcache.Gob.Set(%q): %v", key, err)
 	}
 	return err
 }
@@ -192,67 +195,69 @@ func putObjectCache(ctx context.Context, key string, o *object) error {
 // removeObjectCache removes cached object from memcache.
 // It returns nil in case where memcache.Delete would result in ErrCacheMiss.
 func removeObjectCache(ctx context.Context, bucket, obj string) error {
-	keys := make([]string, len(cacheKeyVariants)+1)
-	keys[0] = objectCacheKey(context.Background(), bucket, obj)
-	for i, v := range cacheKeyVariants {
-		keys[i+1] = keys[0] + v
-	}
-	err := memcache.DeleteMulti(ctx, keys)
-	if me, ok := err.(appengine.MultiError); ok {
-		for _, e := range me {
-			if e != nil && e != memcache.ErrCacheMiss {
-				return err
-			}
-		}
+	k := path.Join(bucket, obj)
+	err := memcache.Delete(ctx, k)
+	if err == memcache.ErrCacheMiss {
 		err = nil
 	}
 	return err
 }
 
-// cacheKeyVariants defines all variants of a cache key of the same object.
-// It must be kept in sync with namespace modifiers created by objectCacheKey.
-var cacheKeyVariants = []string{":gzip"}
-
-// objectCacheKey returns a cache key for object obj and the given bucket.
-//
-// Given an object and an in-flight request associated with ctx,
-// the key can be different based on some request headers which may modify the response.
-func objectCacheKey(ctx context.Context, bucket, obj string) string {
-	k := path.Join(bucket, obj)
-	if h, ok := ctx.Value(headerKey).(http.Header); ok {
-		if strings.Contains(h.Get("accept"), "gzip") {
-			k += ":gzip"
-		}
-	}
-	return k
-}
-
 // useCache reports whether the in-flight request associated with ctx
 // can be responded to with a cached version of an object.
 //
-// It returns false if either "Range" or any of conditional headers are present
-// in the request.
+// It returns false if either "Range", "Origin" or any of conditional headers
+// are present in the request.
 func useCache(ctx context.Context) bool {
 	h, ok := ctx.Value(headerKey).(http.Header)
 	if !ok {
 		return true
 	}
-	if _, ok := h["Range"]; ok {
-		return false
-	}
 	for k := range h {
-		if strings.HasPrefix(k, "If-") {
+		if k == "Range" || k == "Origin" || strings.HasPrefix(k, "If-") {
 			return false
 		}
 	}
 	return true
 }
 
+// statObject is similar to fetchObject except the returned object.Body
+// may be nil.
+func statObject(ctx context.Context, bucket, obj string) (*object, error) {
+	if o, err := getObjectCache(ctx, path.Join(bucket, obj)); err == nil {
+		return o, nil
+	}
+	u := fmt.Sprintf("%s/%s", gcsBase, path.Join(bucket, obj))
+	req, err := http.NewRequest("HEAD", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := httpClient(ctx, scopeStorageRead).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		b, _ := ioutil.ReadAll(res.Body)
+		return nil, &fetchError{
+			msg:  fmt.Sprintf("%s: %s", res.Status, b),
+			code: res.StatusCode,
+		}
+	}
+	meta := make(map[string]string)
+	for _, k := range objectHeaders {
+		if v := res.Header.Get(k); v != "" {
+			meta[k] = v
+		}
+	}
+	return &object{Meta: meta}, nil
+}
+
 // fetchObject retrieves object obj from the given GCS bucket.
 // The returned error will be of type fetchError if the storage responds
 // with an error code.
 func fetchObject(ctx context.Context, bucket, obj string) (*object, error) {
-	u := fmt.Sprintf("%s/%s/%s", gcsBase, bucket, obj)
+	u := fmt.Sprintf("%s/%s", gcsBase, path.Join(bucket, obj))
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		return nil, err
@@ -260,19 +265,24 @@ func fetchObject(ctx context.Context, bucket, obj string) (*object, error) {
 	if h, ok := ctx.Value(headerKey).(http.Header); ok {
 		addUserHeaders(req, h)
 	}
-	res, err := httpClient(ctx, scopeStorageOwner).Do(req)
+	res, err := httpClient(ctx, scopeStorageRead).Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Body.Close()
-	b, _ := ioutil.ReadAll(res.Body)
+
+	// error status code takes precedence over i/o errors
+	b, err := ioutil.ReadAll(res.Body)
 	if res.StatusCode > 399 {
-		err = &fetchError{
+		return nil, &fetchError{
 			msg:  fmt.Sprintf("%s: %s", res.Status, b),
 			code: res.StatusCode,
 		}
+	}
+	if err != nil { // i/o error
 		return nil, err
 	}
+
 	o := &object{
 		Body: b,
 		Meta: make(map[string]string),
