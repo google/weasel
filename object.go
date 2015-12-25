@@ -27,6 +27,7 @@ import (
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/memcache"
 	"google.golang.org/appengine/urlfetch"
@@ -121,6 +122,8 @@ func getFile(ctx context.Context, bucket, name string) (*object, error) {
 			stat, statErr = statObject(ctx, bucket, idxname)
 			close(donec)
 		}()
+	} else {
+		close(donec)
 	}
 
 	// get the original object meanwhile
@@ -133,8 +136,13 @@ func getFile(ctx context.Context, bucket, name string) (*object, error) {
 		return nil, err
 	}
 
-	// check for /dir/index.html
-	<-donec
+	// wait for stat obj
+	select {
+	case <-time.After(5 * time.Second):
+		log.Errorf(ctx, "statObject(%q, %q): timeout", bucket, idxname)
+	case <-donec:
+		// done stat-ing obj
+	}
 	if statErr != nil || stat == nil {
 		// it's not a "directory" either; return the original error
 		return nil, err
@@ -166,59 +174,6 @@ func getObject(ctx context.Context, bucket, obj string) (*object, error) {
 		putObjectCache(ctx, key, o)
 	}
 	return o, nil
-}
-
-// getObjectCache returns an object previously cached with the key.
-func getObjectCache(ctx context.Context, key string) (*object, error) {
-	o := &object{}
-	_, err := memcache.Gob.Get(ctx, key, o)
-	if err != nil && err != memcache.ErrCacheMiss {
-		log.Errorf(ctx, "memcache.Gob.Get(%q): %v", key, err)
-	}
-	return o, err
-}
-
-// putObjectCache updates or creates cached copy of o with the key.
-func putObjectCache(ctx context.Context, key string, o *object) error {
-	item := memcache.Item{
-		Key:        key,
-		Object:     o,
-		Expiration: 24 * time.Hour,
-	}
-	err := memcache.Gob.Set(ctx, &item)
-	if err != nil {
-		log.Errorf(ctx, "memcache.Gob.Set(%q): %v", key, err)
-	}
-	return err
-}
-
-// removeObjectCache removes cached object from memcache.
-// It returns nil in case where memcache.Delete would result in ErrCacheMiss.
-func removeObjectCache(ctx context.Context, bucket, obj string) error {
-	k := path.Join(bucket, obj)
-	err := memcache.Delete(ctx, k)
-	if err == memcache.ErrCacheMiss {
-		err = nil
-	}
-	return err
-}
-
-// useCache reports whether the in-flight request associated with ctx
-// can be responded to with a cached version of an object.
-//
-// It returns false if either "Range", "Origin" or any of conditional headers
-// are present in the request.
-func useCache(ctx context.Context) bool {
-	h, ok := ctx.Value(headerKey).(http.Header)
-	if !ok {
-		return true
-	}
-	for k := range h {
-		if k == "Range" || k == "Origin" || strings.HasPrefix(k, "If-") {
-			return false
-		}
-	}
-	return true
 }
 
 // statObject is similar to fetchObject except the returned object.Body
@@ -295,13 +250,57 @@ func fetchObject(ctx context.Context, bucket, obj string) (*object, error) {
 	return o, nil
 }
 
-// addUserHeaders sets headers on r from h, for all elements of userHeaders.
-func addUserHeaders(r *http.Request, h http.Header) {
-	for _, k := range userHeaders {
-		if v, ok := h[k]; ok {
-			r.Header[k] = v
+// getObjectCache returns an object previously cached with the key.
+func getObjectCache(ctx context.Context, key string) (*object, error) {
+	o := &object{}
+	_, err := memcache.Gob.Get(ctx, key, o)
+	if err != nil && err != memcache.ErrCacheMiss {
+		log.Errorf(ctx, "memcache.Gob.Get(%q): %v", key, err)
+	}
+	return o, err
+}
+
+// putObjectCache updates or creates cached copy of o with the key.
+func putObjectCache(ctx context.Context, key string, o *object) error {
+	item := memcache.Item{
+		Key:        key,
+		Object:     o,
+		Expiration: 24 * time.Hour,
+	}
+	err := memcache.Gob.Set(ctx, &item)
+	if err != nil {
+		log.Errorf(ctx, "memcache.Gob.Set(%q): %v", key, err)
+	}
+	return err
+}
+
+// removeObjectCache removes cached object from memcache.
+// It returns nil in case where memcache.Delete would result in ErrCacheMiss.
+func removeObjectCache(ctx context.Context, bucket, obj string) error {
+	k := path.Join(bucket, obj)
+	err := memcache.Delete(ctx, k)
+	if err == memcache.ErrCacheMiss {
+		err = nil
+	}
+	return err
+}
+
+// useCache reports whether the in-flight request associated with ctx
+// can be responded to with a cached version of an object.
+//
+// It returns false if either "Range", "Origin" or any of conditional headers
+// are present in the request.
+func useCache(ctx context.Context) bool {
+	h, ok := ctx.Value(headerKey).(http.Header)
+	if !ok {
+		return true
+	}
+	for k := range h {
+		if k == "Range" || k == "Origin" || strings.HasPrefix(k, "If-") {
+			return false
 		}
 	}
+	return true
 }
 
 // httpClient returns an authenticated http client, suitable for App Engine.
@@ -311,6 +310,15 @@ func httpClient(c context.Context, scopes ...string) *http.Client {
 		Base:   &urlfetch.Transport{Context: c},
 	}
 	return &http.Client{Transport: t}
+}
+
+// addUserHeaders sets headers on r from h, for all elements of userHeaders.
+func addUserHeaders(r *http.Request, h http.Header) {
+	for _, k := range userHeaders {
+		if v, ok := h[k]; ok {
+			r.Header[k] = v
+		}
+	}
 }
 
 type fetchError struct {
