@@ -54,17 +54,12 @@ var (
 
 	// objectHeaders is a slice of headers propagated from a GCS object.
 	objectHeaders = []string{
-		"accept-ranges",
 		"cache-control",
 		"content-disposition",
 		"content-md5",
-		"content-range",
 		"content-type",
-		"date",
 		"etag",
-		"expires",
 		"last-modified",
-		"retry-after",
 		// CORS
 		"access-control-allow-methods",
 		"access-control-allow-origin",
@@ -79,9 +74,7 @@ var (
 	userHeaders = []string{
 		"If-Modified-Since",
 		"If-None-Match",
-		"If-Range",
 		"Origin",
-		"Range",
 		"User-Agent",
 	}
 )
