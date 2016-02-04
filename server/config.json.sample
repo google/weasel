@@ -5,5 +5,9 @@
   "buckets": {
     "default":         "yummy-weasel",
     "www.example.com": "another-bucket"
-  }
+  },
+  "webroot": "/",
+  "index": "index.html",
+  "hook": "/-/hook/gcs",
+  "gcs": "https://storage.googleapis.com"
 }

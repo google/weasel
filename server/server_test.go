@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package weasel
+package server
 
 import (
 	"net/http"
@@ -20,28 +20,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/weasel"
+
 	"google.golang.org/appengine"
-	"google.golang.org/appengine/aetest"
 	"google.golang.org/appengine/memcache"
 )
 
-func TestValidate_ConfigFile(t *testing.T) {
-	var cfg appConfig
-	if err := readConfig(&cfg, configFile); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := cfg.Buckets["default"]; !ok {
-		t.Errorf("want default bucket in %+v", cfg)
+func TestServerConfig(t *testing.T) {
+	if b := config.Buckets["default"]; b == "" {
+		t.Errorf("want default bucket in %+v", config)
 	}
 }
 
 func TestRedirect(t *testing.T) {
-	ti, err := aetest.NewInstance(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ti.Close()
-
 	const (
 		redirectTo = "https://www.example.com"
 		code       = http.StatusFound
@@ -49,7 +40,7 @@ func TestRedirect(t *testing.T) {
 	handler := redirectHandler(redirectTo, code)
 	urls := []string{"/", "/page", "/page/", "/page?with=query"}
 	for _, u := range urls {
-		req, err := ti.NewRequest("GET", u, nil)
+		req, err := testInstance.NewRequest("GET", u, nil)
 		if err != nil {
 			t.Errorf("%s: %v", u, err)
 			continue
@@ -68,12 +59,6 @@ func TestRedirect(t *testing.T) {
 }
 
 func TestServe_DefaultGCS(t *testing.T) {
-	ti, err := aetest.NewInstance(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ti.Close()
-
 	const (
 		bucket       = "default-bucket"
 		reqFile      = "/dir/"
@@ -82,7 +67,7 @@ func TestServe_DefaultGCS(t *testing.T) {
 		contents     = "contents"
 		cacheControl = "public,max-age=0"
 		// dev_appserver app identity stub
-		authorization = "Bearer InvalidToken:" + scopeStorageRead
+		authorization = "Bearer InvalidToken:" + weasel.ScopeStorageRead
 	)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -105,10 +90,10 @@ func TestServe_DefaultGCS(t *testing.T) {
 		w.Write([]byte(contents))
 	}))
 	defer ts.Close()
-	gcsBase = ts.URL
+	storage.Base = ts.URL
 	config.Buckets = map[string]string{"default": bucket}
 
-	req, _ := ti.NewRequest("GET", reqFile, nil)
+	req, _ := testInstance.NewRequest("GET", reqFile, nil)
 	req.Header.Set("accept-encoding", "client/accept")
 	req.Header.Set("x-foo", "bar")
 	// make sure we're not getting memcached results
@@ -136,18 +121,12 @@ func TestServe_DefaultGCS(t *testing.T) {
 }
 
 func TestServe_Methods(t *testing.T) {
-	ti, err := aetest.NewInstance(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ti.Close()
-
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/plain")
 		w.Write([]byte("methods test"))
 	}))
 	defer ts.Close()
-	gcsBase = ts.URL
+	storage.Base = ts.URL
 	config.Buckets = map[string]string{"default": "bucket"}
 
 	tests := []struct {
@@ -165,7 +144,7 @@ func TestServe_Methods(t *testing.T) {
 		{"DELETE", "", http.StatusMethodNotAllowed},
 	}
 	for i, test := range tests {
-		r, _ := ti.NewRequest(test.method, "/file.txt", nil)
+		r, _ := testInstance.NewRequest(test.method, "/file.txt", nil)
 		rw := httptest.NewRecorder()
 		http.DefaultServeMux.ServeHTTP(rw, r)
 		if rw.Code != test.code {
@@ -178,39 +157,34 @@ func TestServe_Methods(t *testing.T) {
 }
 
 func TestServe_Memcache(t *testing.T) {
-	ti, err := aetest.NewInstance(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ti.Close()
-
 	const (
 		bucket       = "default-bucket"
-		reqFile      = "/index.html"
-		realFile     = bucket + "/index.html"
+		file         = "index.html"
 		contentType  = "text/html"
 		contents     = "cached file"
 		cacheControl = "public,max-age=10"
 	)
+	// make sure we don't hit real GCS
+	storage.Base = "invalid"
+	// overwrite global config
+	config.Buckets = map[string]string{"default": bucket}
 
-	req, _ := ti.NewRequest("GET", reqFile, nil)
+	req, _ := testInstance.NewRequest("GET", "/"+file, nil)
 	ctx := appengine.NewContext(req)
-	obj := &object{
+	obj := &weasel.Object{
 		Meta: map[string]string{
 			"content-type":  contentType,
 			"cache-control": cacheControl,
 		},
 		Body: []byte(contents),
 	}
-	item := memcache.Item{Key: realFile, Object: obj}
+	item := memcache.Item{
+		Key:    storage.CacheKey(bucket, file),
+		Object: obj,
+	}
 	if err := memcache.Gob.Set(ctx, &item); err != nil {
 		t.Fatal(err)
 	}
-
-	// make sure we don't hit real GCS
-	gcsBase = "invalid"
-	// overwrite global config
-	config.Buckets = map[string]string{"default": bucket}
 
 	res := httptest.NewRecorder()
 	http.DefaultServeMux.ServeHTTP(res, req)
@@ -229,20 +203,14 @@ func TestServe_Memcache(t *testing.T) {
 }
 
 func TestServe_GCSErrors(t *testing.T) {
-	ti, err := aetest.NewInstance(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ti.Close()
-
 	const code = http.StatusBadRequest
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(code)
 	}))
 	defer ts.Close()
-	gcsBase = ts.URL
+	storage.Base = ts.URL
 
-	req, err := ti.NewRequest("GET", "/bad", nil)
+	req, err := testInstance.NewRequest("GET", "/bad", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,12 +222,6 @@ func TestServe_GCSErrors(t *testing.T) {
 }
 
 func TestServe_NoTrailSlash(t *testing.T) {
-	ti, err := aetest.NewInstance(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ti.Close()
-
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/bucket/dir-one/two/index.html" {
 			w.WriteHeader(http.StatusNotFound)
@@ -271,10 +233,10 @@ func TestServe_NoTrailSlash(t *testing.T) {
 		}
 	}))
 	defer ts.Close()
-	gcsBase = ts.URL
+	storage.Base = ts.URL
 	config.Buckets = map[string]string{"default": "bucket"}
 
-	req, _ := ti.NewRequest("GET", "/dir-one/two", nil)
+	req, _ := testInstance.NewRequest("GET", "/dir-one/two", nil)
 	// make sure we're not getting memcached results
 	if err := memcache.Flush(appengine.NewContext(req)); err != nil {
 		t.Fatal(err)
@@ -291,16 +253,9 @@ func TestServe_NoTrailSlash(t *testing.T) {
 }
 
 func TestHook(t *testing.T) {
-	ti, err := aetest.NewInstance(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ti.Close()
-
 	body := `{"bucket": "dummy", "name": "path/obj"}`
-	req, _ := ti.NewRequest("POST", "/-/hook/gcs", strings.NewReader(body))
-
-	const cacheKey = "dummy/path/obj"
+	cacheKey := storage.CacheKey("dummy", "path/obj")
+	req, _ := testInstance.NewRequest("POST", "/-/hook/gcs", strings.NewReader(body))
 	ctx := appengine.NewContext(req)
 	item := &memcache.Item{Key: cacheKey, Value: []byte("ignored")}
 	if err := memcache.Set(ctx, item); err != nil {
@@ -318,7 +273,7 @@ func TestHook(t *testing.T) {
 	}
 
 	// cache misses must not respond with an error code
-	req, _ = ti.NewRequest("POST", "/-/hook/gcs", strings.NewReader(body))
+	req, _ = testInstance.NewRequest("POST", "/-/hook/gcs", strings.NewReader(body))
 	res = httptest.NewRecorder()
 	http.DefaultServeMux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {

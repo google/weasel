@@ -15,257 +15,42 @@
 package weasel
 
 import (
-	"fmt"
-	"io/ioutil"
 	"net/http"
-	"path"
-	"path/filepath"
 	"strconv"
-	"strings"
-	"time"
-
-	"golang.org/x/net/context"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
-
-	"google.golang.org/appengine/log"
-	"google.golang.org/appengine/memcache"
-	"google.golang.org/appengine/urlfetch"
 )
 
 const (
-	// defaultIndex is the trailing part of GCS object name
-	// when none is specified in an in-flight request.
-	defaultIndex = "index.html"
-
 	// object custom metadata
 	metaRedirect     = "x-goog-meta-redirect"
 	metaRedirectCode = "x-goog-meta-redirect-code"
-
-	// GCS OAuth2 scopes
-	scopeStorageRead  = "https://www.googleapis.com/auth/devstorage.read_only"
-	scopeStorageOwner = "https://www.googleapis.com/auth/devstorage.full_control"
 )
 
-var (
-	// gcsBase is the GCS base URL for fetching objects.
-	// defined as var for easier testing.
-	gcsBase = "https://storage.googleapis.com"
+// objectHeaders is a slice of headers propagated from a GCS object.
+var objectHeaders = []string{
+	"cache-control",
+	"content-disposition",
+	"content-type",
+	"etag",
+	"last-modified",
+}
 
-	// objectHeaders is a slice of headers propagated from a GCS object.
-	objectHeaders = []string{
-		"cache-control",
-		"content-disposition",
-		"content-type",
-		"etag",
-		"last-modified",
-	}
-)
-
-// object represents a single GCS object.
-type object struct {
+// Object represents a single GCS object.
+type Object struct {
 	Meta map[string]string
 	Body []byte
 }
 
-func (o *object) redirect() string {
+// Redirect returns o's redirect URL, zero string otherwise.
+func (o *Object) Redirect() string {
 	return o.Meta[metaRedirect]
 }
 
-func (o *object) redirectCode() int {
+// RedirectCode returns o's HTTP response code for redirect.
+// It defaults to http.StatusMovedPermanently.
+func (o *Object) RedirectCode() int {
 	c, err := strconv.Atoi(o.Meta[metaRedirectCode])
 	if err != nil {
 		c = http.StatusMovedPermanently
 	}
 	return c
-}
-
-// getFile abstracts getObject and treats object name like a file path.
-func getFile(ctx context.Context, bucket, name string) (*object, error) {
-	if name == "" || strings.HasSuffix(name, "/") {
-		name += defaultIndex
-	}
-
-	// stat /dir/index.html if name is /dir, concurrently
-	var (
-		stat    *object
-		statErr error
-		donec   = make(chan struct{})
-	)
-	idxname := path.Join(name, defaultIndex)
-	if !strings.HasSuffix(name, defaultIndex) && filepath.Ext(name) == "" {
-		go func() {
-			stat, statErr = statObject(ctx, bucket, idxname)
-			close(donec)
-		}()
-	} else {
-		close(donec)
-	}
-
-	// get the original object meanwhile
-	o, err := getObject(ctx, bucket, name)
-	if err == nil {
-		return o, nil
-	}
-	// return non-404 errors right away
-	if ferr, ok := err.(*fetchError); ok && ferr.code != http.StatusNotFound {
-		return nil, err
-	}
-
-	// wait for stat obj
-	select {
-	case <-time.After(5 * time.Second):
-		log.Errorf(ctx, "statObject(%q, %q): timeout", bucket, idxname)
-	case <-donec:
-		// done stat-ing obj
-	}
-	if statErr != nil || stat == nil {
-		// it's not a "directory" either; return the original error
-		return nil, err
-	}
-	if stat.redirect() == "" {
-		stat = &object{Meta: map[string]string{
-			metaRedirect: "/" + idxname[:len(idxname)-len(defaultIndex)],
-		}}
-	}
-	return stat, nil
-}
-
-// getObject retrieves GCS object obj of the bucket from cache or network.
-// Objects fetched from the network are cached before returning
-// from this function.
-func getObject(ctx context.Context, bucket, obj string) (*object, error) {
-	key := path.Join(bucket, obj)
-	o, err := getObjectCache(ctx, key)
-	if err != nil {
-		o, err = fetchObject(ctx, bucket, obj)
-		if err == nil {
-			putObjectCache(ctx, key, o)
-		}
-	}
-	return o, err
-}
-
-// statObject is similar to fetchObject except the returned object.Body
-// may be nil.
-func statObject(ctx context.Context, bucket, obj string) (*object, error) {
-	if o, err := getObjectCache(ctx, path.Join(bucket, obj)); err == nil {
-		return o, nil
-	}
-	u := fmt.Sprintf("%s/%s", gcsBase, path.Join(bucket, obj))
-	req, err := http.NewRequest("HEAD", u, nil)
-	if err != nil {
-		return nil, err
-	}
-	res, err := httpClient(ctx, scopeStorageRead).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		b, _ := ioutil.ReadAll(res.Body)
-		return nil, &fetchError{
-			msg:  fmt.Sprintf("%s: %s", res.Status, b),
-			code: res.StatusCode,
-		}
-	}
-	meta := make(map[string]string)
-	for _, k := range objectHeaders {
-		if v := res.Header.Get(k); v != "" {
-			meta[k] = v
-		}
-	}
-	return &object{Meta: meta}, nil
-}
-
-// fetchObject retrieves object obj from the given GCS bucket.
-// The returned error will be of type fetchError if the storage responds
-// with an error code.
-func fetchObject(ctx context.Context, bucket, obj string) (*object, error) {
-	u := fmt.Sprintf("%s/%s", gcsBase, path.Join(bucket, obj))
-	req, err := http.NewRequest("GET", u, nil)
-	if err != nil {
-		return nil, err
-	}
-	res, err := httpClient(ctx, scopeStorageRead).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-
-	// error status code takes precedence over i/o errors
-	b, err := ioutil.ReadAll(res.Body)
-	if res.StatusCode > 399 {
-		return nil, &fetchError{
-			msg:  fmt.Sprintf("%s: %s", res.Status, b),
-			code: res.StatusCode,
-		}
-	}
-	if err != nil { // i/o error
-		return nil, err
-	}
-
-	o := &object{
-		Body: b,
-		Meta: make(map[string]string),
-	}
-	for _, k := range objectHeaders {
-		if v := res.Header.Get(k); v != "" {
-			o.Meta[k] = v
-		}
-	}
-	return o, nil
-}
-
-// getObjectCache returns an object previously cached with the key.
-func getObjectCache(ctx context.Context, key string) (*object, error) {
-	o := &object{}
-	_, err := memcache.Gob.Get(ctx, key, o)
-	if err != nil && err != memcache.ErrCacheMiss {
-		log.Errorf(ctx, "memcache.Gob.Get(%q): %v", key, err)
-	}
-	return o, err
-}
-
-// putObjectCache updates or creates cached copy of o with the key.
-func putObjectCache(ctx context.Context, key string, o *object) error {
-	item := memcache.Item{
-		Key:        key,
-		Object:     o,
-		Expiration: 24 * time.Hour,
-	}
-	err := memcache.Gob.Set(ctx, &item)
-	if err != nil {
-		log.Errorf(ctx, "memcache.Gob.Set(%q): %v", key, err)
-	}
-	return err
-}
-
-// removeObjectCache removes cached object from memcache.
-// It returns nil in case where memcache.Delete would result in ErrCacheMiss.
-func removeObjectCache(ctx context.Context, bucket, obj string) error {
-	k := path.Join(bucket, obj)
-	err := memcache.Delete(ctx, k)
-	if err == memcache.ErrCacheMiss {
-		err = nil
-	}
-	return err
-}
-
-// httpClient returns an authenticated http client, suitable for App Engine.
-func httpClient(c context.Context, scopes ...string) *http.Client {
-	t := &oauth2.Transport{
-		Source: google.AppEngineTokenSource(c, scopes...),
-		Base:   &urlfetch.Transport{Context: c},
-	}
-	return &http.Client{Transport: t}
-}
-
-type fetchError struct {
-	msg  string
-	code int
-}
-
-func (e *fetchError) Error() string {
-	return fmt.Sprintf("fetchError %d: %s", e.code, e.msg)
 }

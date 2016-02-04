@@ -19,9 +19,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
-
-	"golang.org/x/net/context"
 
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/log"
@@ -35,55 +32,17 @@ var (
 		"HEAD",
 		"OPTIONS",
 	}
-
 	// allowMethodsStr is allowMethods in a single string version,
 	// suitable for Allow or CORS allow methods header.
 	allowMethodsStr = strings.Join(allowMethods, ", ")
 )
 
-func init() {
-	if err := readConfig(&config, configFile); err != nil {
-		panic(err)
-	}
-	for host, redir := range config.Redirects {
-		http.Handle(host, redirectHandler(redir, http.StatusMovedPermanently))
-	}
-	http.HandleFunc("/", serveObject)
-	http.HandleFunc("/-/hook/gcs", handleHook)
-}
-
-// serveObject responds with a GCS object contents, preserving its original headers
-// listed in objectHeaders.
-// The bucket is identifed by matching r.Host against config.Buckets map keys.
-// Default bucket is used if no match is found.
-//
-// Only GET, HEAD and OPTIONS methods are allowed.
-func serveObject(w http.ResponseWriter, r *http.Request) {
-	if !validMethod(r.Method) {
-		http.Error(w, "", http.StatusMethodNotAllowed)
-		return
-	}
-
-	ctx := newContext(r)
-	bucket := bucketForHost(r.Host)
-	oname := r.URL.Path[1:]
-
-	o, err := getFile(ctx, bucket, oname)
-	if err != nil {
-		code := http.StatusInternalServerError
-		if errf, ok := err.(*fetchError); ok {
-			code = errf.code
-		}
-		serveError(w, code, "")
-		if code != http.StatusNotFound {
-			log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
-		}
-		return
-	}
-
-	if v := o.redirect(); v != "" {
-		http.Redirect(w, r, v, o.redirectCode())
-		return
+// ServeObject writes object o to w, with optional body.
+func ServeObject(w http.ResponseWriter, o *Object, withBody bool) error {
+	if v := o.Redirect(); v != "" {
+		w.Header().Set("location", v)
+		w.WriteHeader(o.RedirectCode())
+		return nil
 	}
 
 	// headers
@@ -92,19 +51,18 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 		h.Set(k, v)
 	}
 	h.Set("allow", allowMethodsStr)
-	// body, but only if GET request
-	if r.Method == "GET" {
-		_, err := w.Write(o.Body)
-		if err != nil {
-			log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
-		}
+	// body
+	var err error
+	if withBody {
+		_, err = w.Write(o.Body)
 	}
+	return err
 }
 
-// handleHook handles Object Change Notifications as described at
+// HandleChangeHook handles Object Change Notifications as described at
 // https://cloud.google.com/storage/docs/object-change-notification.
 // It removes objects from cache.
-func handleHook(w http.ResponseWriter, r *http.Request) {
+func (s *Storage) HandleChangeHook(w http.ResponseWriter, r *http.Request) {
 	// skip sync requests
 	if v := r.Header.Get("x-goog-resource-state"); v == "sync" {
 		return
@@ -118,53 +76,14 @@ func handleHook(w http.ResponseWriter, r *http.Request) {
 		log.Errorf(ctx, "json.Decode: %v", err.Error())
 		return
 	}
-	if err := removeObjectCache(ctx, body.Bucket, body.Name); err != nil {
-		log.Errorf(ctx, "removeObjectCache: %v", err)
-		// let GCS retry
-		w.WriteHeader(http.StatusInternalServerError)
+	if err := s.PurgeCache(ctx, body.Bucket, body.Name); err != nil {
+		log.Errorf(ctx, "s.PurgeCache(%q, %q): %v", body.Bucket, body.Name, err)
+		w.WriteHeader(http.StatusInternalServerError) // let GCS retry
 	}
 }
 
-func serveError(w http.ResponseWriter, code int, msg string) {
-	if msg == "" {
-		msg = http.StatusText(code)
-	}
-	w.WriteHeader(code)
-	// TODO: render some template
-	w.Write([]byte(msg))
-}
-
-// redirectHandler creates a new handler which redirects all requests
-// to the specified url, preserving original path and raw query.
-func redirectHandler(url string, code int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u := url + r.URL.Path
-		if r.URL.RawQuery != "" {
-			u += "?" + r.URL.RawQuery
-		}
-		http.Redirect(w, r, u, code)
-	})
-}
-
-// validMethod reports whether allowMethods contains m.
-func validMethod(m string) bool {
+// ValidMethod reports whether m is a supported HTTP method.
+func ValidMethod(m string) bool {
 	i := sort.SearchStrings(allowMethods, m)
 	return i < len(allowMethods) && allowMethods[i] == m
-}
-
-// bucketForHost returns a bucket name mapped to the host.
-// Default bucket name is return if no match found.
-func bucketForHost(host string) string {
-	if b, ok := config.Buckets[host]; ok {
-		return b
-	}
-	return config.Buckets["default"]
-}
-
-// newContext creates a new context from a client in-flight request.
-// It should not be used for server-to-server, such as web hooks.
-func newContext(r *http.Request) context.Context {
-	c := appengine.NewContext(r)
-	c, _ = context.WithTimeout(c, 10*time.Second)
-	return c
 }
