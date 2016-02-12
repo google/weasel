@@ -1,0 +1,3 @@
+*.pem
+config.json
+start-local.sh
