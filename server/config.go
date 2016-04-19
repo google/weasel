@@ -35,6 +35,11 @@ type appConfig struct {
 	// Map values must not end with "/" and cannot contain query string.
 	Redirects map[string]string `json:"redirects"`
 
+	// TLSOnly will force TLS connection for the specified host names.
+	TLSOnly []string `json:"tlsonly"`
+	// tlsOnly is an internal map created from TLSOnly config field.
+	tlsOnly map[string]struct{}
+
 	// Buckets defines a mapping between hosts
 	// and GCS buckets the responses should be served from.
 	// The map must contain at least "default" key.
@@ -65,6 +70,10 @@ func readConfig() error {
 	}
 	if config.GCSBase == "" {
 		config.GCSBase = weasel.DefaultStorage.Base
+	}
+	config.tlsOnly = make(map[string]struct{})
+	for _, v := range config.TLSOnly {
+		config.tlsOnly[v] = struct{}{}
 	}
 	return nil
 }

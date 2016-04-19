@@ -58,6 +58,20 @@ func TestRedirect(t *testing.T) {
 	}
 }
 
+func TestTLSOnly(t *testing.T) {
+	config.tlsOnly = map[string]struct{}{"example.com": {}}
+	r, _ := testInstance.NewRequest("GET", "http://example.com/page?foo=bar", nil)
+	w := httptest.NewRecorder()
+	http.DefaultServeMux.ServeHTTP(w, r)
+	if w.Code != http.StatusMovedPermanently {
+		t.Errorf("w.Code = %d; want %d", w.Code, http.StatusMovedPermanently)
+	}
+	want := "https://example.com/page?foo=bar"
+	if l := w.Header().Get("location"); l != want {
+		t.Errorf("location = %q; want %q", l, want)
+	}
+}
+
 func TestServe_DefaultGCS(t *testing.T) {
 	const (
 		bucket       = "default-bucket"

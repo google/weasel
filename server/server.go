@@ -51,6 +51,14 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusMethodNotAllowed)
 		return
 	}
+	if _, force := config.tlsOnly[r.Host]; force && r.TLS == nil {
+		u := "https://" + r.Host + r.URL.Path
+		if r.URL.RawQuery != "" {
+			u += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, u, http.StatusMovedPermanently)
+		return
+	}
 
 	ctx := newContext(r)
 	bucket := bucketForHost(r.Host)
