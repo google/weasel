@@ -4,7 +4,7 @@
   },
   "tlsonly": [
     "another.host"
-  ]
+  ],
   "buckets": {
     "default":         "yummy-weasel",
     "www.example.com": "another-bucket"
