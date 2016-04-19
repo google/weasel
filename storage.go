@@ -210,6 +210,10 @@ func getCache(ctx context.Context, key string) (*Object, error) {
 }
 
 func putCache(ctx context.Context, key string, o *Object) error {
+	if len(o.Body) > 1<<20 {
+		// won't cache objects larger than 1M
+		return nil
+	}
 	item := memcache.Item{
 		Key:        key,
 		Object:     o,
