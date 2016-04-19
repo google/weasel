@@ -23,9 +23,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/weasel/internal"
+
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/memcache"
@@ -231,7 +232,7 @@ func purgeCache(ctx context.Context, key string) error {
 
 func httpClient(ctx context.Context, scopes ...string) *http.Client {
 	t := &oauth2.Transport{
-		Source: google.AppEngineTokenSource(ctx, scopes...),
+		Source: internal.AETokenSource(ctx, scopes...),
 		Base:   &urlfetch.Transport{Context: ctx},
 	}
 	return &http.Client{Transport: t}

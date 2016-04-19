@@ -18,7 +18,13 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/google/weasel/internal"
+
+	"golang.org/x/net/context"
+	"golang.org/x/oauth2"
 
 	"google.golang.org/appengine/aetest"
 )
@@ -33,6 +39,14 @@ func TestMain(m *testing.M) {
 	testInstance, err = aetest.NewInstance(nil)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	// app engine token source stub
+	internal.AETokenSource = func(c context.Context, scopes ...string) oauth2.TokenSource {
+		t := &oauth2.Token{
+			AccessToken: "InvalidToken:" + strings.Join(scopes, ","),
+		}
+		return oauth2.StaticTokenSource(t)
 	}
 
 	code := m.Run()

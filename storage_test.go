@@ -26,7 +26,6 @@ import (
 )
 
 func TestReadFileIndex(t *testing.T) {
-	t.Parallel()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// dev_appserver app identity stub
 		auth := "Bearer InvalidToken:" + ScopeStorageRead
@@ -63,7 +62,6 @@ func TestReadFileIndex(t *testing.T) {
 }
 
 func TestReadFileNoTrailSlash(t *testing.T) {
-	t.Parallel()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/bucket/no/slash/index.html" {
 			w.WriteHeader(http.StatusNotFound)
@@ -98,7 +96,6 @@ func TestReadFileNoTrailSlash(t *testing.T) {
 }
 
 func TestReadObjectCache(t *testing.T) {
-	t.Parallel()
 	req, _ := testInstance.NewRequest("GET", "/", nil)
 	ctx := appengine.NewContext(req)
 	stor := &Storage{Base: "invalid"} // make sure we don't hit real GCS
@@ -127,7 +124,6 @@ func TestReadObjectCache(t *testing.T) {
 }
 
 func TestReadObjectErr(t *testing.T) {
-	t.Parallel()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	}))
