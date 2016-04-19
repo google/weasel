@@ -28,7 +28,7 @@ import (
 func TestReadFileIndex(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// dev_appserver app identity stub
-		auth := "Bearer InvalidToken:" + ScopeStorageRead
+		auth := "Bearer InvalidToken:https://www.googleapis.com/auth/devstorage.read_only"
 		if v := r.Header.Get("authorization"); !strings.HasPrefix(v, auth) {
 			t.Errorf("auth = %q; want prefix %q", v, auth)
 		}

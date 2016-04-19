@@ -35,8 +35,8 @@ import (
 
 // Google Cloud Storage OAuth2 scopes
 const (
-	ScopeStorageRead  = "https://www.googleapis.com/auth/devstorage.read_only"
-	ScopeStorageOwner = "https://www.googleapis.com/auth/devstorage.full_control"
+	scopeStorageRead  = "https://www.googleapis.com/auth/devstorage.read_only"
+	scopeStorageOwner = "https://www.googleapis.com/auth/devstorage.full_control"
 )
 
 // DefaultStorage is a Storage with sensible default parameters
@@ -128,7 +128,7 @@ func (s *Storage) Stat(ctx context.Context, bucket, name string) (*Object, error
 	if err != nil {
 		return nil, err
 	}
-	res, err := httpClient(ctx, ScopeStorageRead).Do(req)
+	res, err := httpClient(ctx, scopeStorageRead).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +170,7 @@ func (s *Storage) fetch(ctx context.Context, bucket, obj string) (*Object, error
 	if err != nil {
 		return nil, err
 	}
-	res, err := httpClient(ctx, ScopeStorageRead).Do(req)
+	res, err := httpClient(ctx, scopeStorageRead).Do(req)
 	if err != nil {
 		return nil, err
 	}

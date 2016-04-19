@@ -81,7 +81,7 @@ func TestServe_DefaultGCS(t *testing.T) {
 		contents     = "contents"
 		cacheControl = "public,max-age=0"
 		// dev_appserver app identity stub
-		authorization = "Bearer InvalidToken:" + weasel.ScopeStorageRead
+		authorization = "Bearer InvalidToken:https://www.googleapis.com/auth/devstorage.read_only"
 	)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
