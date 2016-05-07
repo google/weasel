@@ -24,39 +24,45 @@ import (
 	"google.golang.org/appengine/log"
 )
 
-var (
-	// allowMethods is a slice of allow methods when requesting a GCS object.
-	// The slice must be sorted in lexical order.
-	allowMethods = []string{
-		"GET",
-		"HEAD",
-		"OPTIONS",
-	}
-	// allowMethodsStr is allowMethods in a single string version,
-	// suitable for Allow or CORS allow methods header.
-	allowMethodsStr = strings.Join(allowMethods, ", ")
-)
+// allowMethods is a comman-separated list of allowed HTTP methods,
+// suitable for Allow or CORS allow-methods header.
+var allowMethods = "GET, HEAD, OPTIONS"
 
-// ServeObject writes object o to w, with optional body.
-func ServeObject(w http.ResponseWriter, o *Object, withBody bool) error {
-	if v := o.Redirect(); v != "" {
-		w.Header().Set("location", v)
-		w.WriteHeader(o.RedirectCode())
-		return nil
-	}
-
+// ServeObject writes object o to w, with optional body and CORS headers,
+// based on the in-flight request r.
+func (s *Storage) ServeObject(w http.ResponseWriter, r *http.Request, o *Object) error {
 	// headers
 	h := w.Header()
 	for k, v := range o.Meta {
 		h.Set(k, v)
 	}
-	h.Set("allow", allowMethodsStr)
-	// body
-	var err error
-	if withBody {
-		_, err = w.Write(o.Body)
+	h.Set("allow", allowMethods)
+	if o := corsMatch(&s.CORS, r.Header.Get("origin")); o != "" {
+		h.Set("access-control-allow-origin", o)
+		if r.Method == "OPTIONS" {
+			h.Set("access-control-allow-methods", allowMethods)
+			h.Set("access-control-allow-headers", r.Header.Get("access-control-request-headers"))
+			h.Set("access-control-expose-headers", "Location, Etag, Content-Disposition")
+			if s.CORS.MaxAge != "" {
+				h.Set("access-control-max-age", s.CORS.MaxAge)
+			}
+		}
 	}
-	return err
+
+	// redirect
+	if v := o.Redirect(); v != "" && r.Method != "OPTIONS" {
+		h.Set("location", v)
+		w.WriteHeader(o.RedirectCode())
+		return nil
+	}
+
+	// body
+	if r.Method == "GET" {
+		_, err := w.Write(o.Body)
+		return err
+	}
+
+	return nil
 }
 
 // HandleChangeHook handles Object Change Notifications as described at
@@ -84,6 +90,22 @@ func (s *Storage) HandleChangeHook(w http.ResponseWriter, r *http.Request) {
 
 // ValidMethod reports whether m is a supported HTTP method.
 func ValidMethod(m string) bool {
-	i := sort.SearchStrings(allowMethods, m)
-	return i < len(allowMethods) && allowMethods[i] == m
+	return strings.Index(allowMethods, m) >= 0
+}
+
+func corsMatch(cors *CORS, o string) string {
+	if len(cors.Origin) == 0 {
+		return ""
+	}
+	if cors.Origin[0] == "*" {
+		return "*"
+	}
+	if cors.Origin[0] == o {
+		return o
+	}
+	i := sort.SearchStrings(cors.Origin, o)
+	if i < len(cors.Origin) && cors.Origin[i] == o {
+		return o
+	}
+	return ""
 }

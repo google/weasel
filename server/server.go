@@ -77,7 +77,7 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := weasel.ServeObject(w, o, r.Method == "GET"); err != nil {
+	if err := storage.ServeObject(w, r, o); err != nil {
 		log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
 	}
 }

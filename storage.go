@@ -39,17 +39,27 @@ const (
 	scopeStorageOwner = "https://www.googleapis.com/auth/devstorage.full_control"
 )
 
-// DefaultStorage is a Storage with sensible default parameters
-// suitable for prod environments on App Engine.
+// DefaultStorage is a Storage with sensible default parameters.
 var DefaultStorage = &Storage{
 	Base:  "https://storage.googleapis.com",
 	Index: "index.html",
+	CORS: CORS{
+		Origin: []string{"*"},
+		MaxAge: "86400",
+	},
+}
+
+// CORS is a Storage cross-origin settings.
+type CORS struct {
+	Origin []string // allowed origins
+	MaxAge string   // preflight cache, in seconds
 }
 
 // Storage incapsulates configuration params for retrieveing and serving GCS objects.
 type Storage struct {
 	Base  string // GCS service base URL, e.g. "https://storage.googleapis.com".
 	Index string // Appended to an object name in certain cases, e.g. "index.html".
+	CORS  CORS
 }
 
 // ReadFile abstracts ReadObject and treats object name like a file path.
