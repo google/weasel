@@ -41,7 +41,7 @@ const (
 
 // DefaultStorage is a Storage with sensible default parameters
 // suitable for prod environments on App Engine.
-var DefaultStorage = Storage{
+var DefaultStorage = &Storage{
 	Base:  "https://storage.googleapis.com",
 	Index: "index.html",
 }
