@@ -16,6 +16,7 @@ package weasel
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -58,7 +59,7 @@ func (s *Storage) ServeObject(w http.ResponseWriter, r *http.Request, o *Object)
 
 	// body
 	if r.Method == "GET" {
-		_, err := w.Write(o.Body)
+		_, err := io.Copy(w, o.Body)
 		return err
 	}
 

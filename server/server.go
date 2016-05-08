@@ -64,7 +64,7 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 	bucket := bucketForHost(r.Host)
 	oname := r.URL.Path[1:]
 
-	o, err := storage.ReadFile(ctx, bucket, oname)
+	o, err := storage.OpenFile(ctx, bucket, oname)
 	if err != nil {
 		code := http.StatusInternalServerError
 		if errf, ok := err.(*weasel.FetchError); ok {
@@ -76,10 +76,10 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-
 	if err := storage.ServeObject(w, r, o); err != nil {
 		log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
 	}
+	o.Body.Close()
 }
 
 // redirectHandler creates a new handler which redirects all requests

@@ -15,6 +15,7 @@
 package weasel
 
 import (
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -25,7 +26,7 @@ import (
 	"google.golang.org/appengine/memcache"
 )
 
-func TestReadFileIndex(t *testing.T) {
+func TestOpenFileIndex(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// dev_appserver app identity stub
 		auth := "Bearer InvalidToken:https://www.googleapis.com/auth/devstorage.read_only"
@@ -52,16 +53,18 @@ func TestReadFileIndex(t *testing.T) {
 	}
 
 	stor := &Storage{Base: ts.URL, Index: "index"}
-	obj, err := stor.ReadFile(ctx, "bucket", "/dir/")
+	obj, err := stor.OpenFile(ctx, "bucket", "/dir/")
 	if err != nil {
-		t.Fatalf("stor.ReadFile: %v", err)
+		t.Fatalf("stor.OpenFile: %v", err)
 	}
-	if v := string(obj.Body); v != "test file" {
-		t.Errorf("obj.Body = %q; want 'test file'", obj.Body)
+	defer obj.Body.Close()
+	b, _ := ioutil.ReadAll(obj.Body)
+	if string(b) != "test file" {
+		t.Errorf("obj.Body = %q; want 'test file'", b)
 	}
 }
 
-func TestReadFileNoTrailSlash(t *testing.T) {
+func TestOpenFileNoTrailSlash(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/bucket/no/slash/index.html" {
 			w.WriteHeader(http.StatusNotFound)
@@ -82,10 +85,11 @@ func TestReadFileNoTrailSlash(t *testing.T) {
 	}
 
 	stor := &Storage{Base: ts.URL, Index: "index.html"}
-	o, err := stor.ReadFile(ctx, "bucket", "/no/slash")
+	o, err := stor.OpenFile(ctx, "bucket", "/no/slash")
 	if err != nil {
-		t.Fatalf("stor.ReadFile: %v", err)
+		t.Fatalf("stor.OpenFile: %v", err)
 	}
+	defer o.Body.Close()
 	loc := "/no/slash/"
 	if v := o.Redirect(); v != loc {
 		t.Errorf("o.Redirect() = %q; want %q", v, loc)
@@ -95,11 +99,59 @@ func TestReadFileNoTrailSlash(t *testing.T) {
 	}
 }
 
-func TestReadObjectCache(t *testing.T) {
-	req, _ := testInstance.NewRequest("GET", "/", nil)
-	ctx := appengine.NewContext(req)
+func TestOpenAndCache(t *testing.T) {
+	const body = `{"foo":"bar"}`
+	meta := map[string]string{"content-type": "application/json"}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for k, v := range meta {
+			w.Header().Set(k, v)
+		}
+		w.Write([]byte(body))
+	}))
+	defer ts.Close()
+
+	r, _ := testInstance.NewRequest("GET", "/", nil)
+	ctx := appengine.NewContext(r)
+	// make sure we're not getting memcached results
+	if err := memcache.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	stor := &Storage{Base: ts.URL}
+	o, err := stor.Open(ctx, "bucket", "/file.json")
+	if err != nil {
+		t.Fatalf("stor.Open: %v", err)
+	}
+	defer o.Body.Close()
+	b, err := ioutil.ReadAll(o.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(o.Body): %v", err)
+	}
+	if string(b) != body {
+		t.Errorf("o.Body = %q; want %q", b, body)
+	}
+	if !reflect.DeepEqual(o.Meta, meta) {
+		t.Errorf("o.Meta = %+v; want %+v", o.Meta, meta)
+	}
+
+	key := stor.CacheKey("bucket", "/file.json")
+	var ob objectBuf
+	if _, err := memcache.Gob.Get(ctx, key, &ob); err != nil {
+		t.Fatalf("memcache.Gob.Get(%q): %v", key, err)
+	}
+	if string(ob.Body) != body {
+		t.Errorf("ob.Body = %q; want %q", ob.Body, body)
+	}
+	if !reflect.DeepEqual(ob.Meta, meta) {
+		t.Errorf("ob.Meta = %+v; want %+v", ob.Meta, meta)
+	}
+}
+
+func TestOpenFromCache(t *testing.T) {
+	r, _ := testInstance.NewRequest("GET", "/", nil)
+	ctx := appengine.NewContext(r)
 	stor := &Storage{Base: "invalid"} // make sure we don't hit real GCS
-	want := &Object{
+	ob := &objectBuf{
 		Meta: map[string]string{
 			"content-type":  "text/html",
 			"cache-control": "public,max-age=10",
@@ -107,23 +159,31 @@ func TestReadObjectCache(t *testing.T) {
 		Body: []byte("cached file"),
 	}
 	item := memcache.Item{
-		Key:    stor.CacheKey("bucket", "TestReadObjectCache"),
-		Object: want,
+		Key:    stor.CacheKey("bucket", "TestOpenFromCache"),
+		Object: ob,
 	}
 	if err := memcache.Gob.Set(ctx, &item); err != nil {
 		t.Fatal(err)
 	}
 
-	have, err := stor.ReadObject(ctx, "bucket", "TestReadObjectCache")
+	o, err := stor.Open(ctx, "bucket", "TestOpenFromCache")
 	if err != nil {
-		t.Fatalf("stor.ReadObject: %v", err)
+		t.Fatalf("stor.Open: %v", err)
 	}
-	if !reflect.DeepEqual(have, want) {
-		t.Errorf("have = %+v; want %+v", have, want)
+	defer o.Body.Close()
+	if _, isbuf := o.Body.(*objectBuf); isbuf {
+		t.Errorf("o.Body is *objectBuf")
+	}
+	if !reflect.DeepEqual(o.Meta, ob.Meta) {
+		t.Errorf("o.Meta = %+v; want %+v", o.Meta, ob.Meta)
+	}
+	b, _ := ioutil.ReadAll(o.Body)
+	if string(b) != "cached file" {
+		t.Errorf("o.Body = %q; want 'cached file'", b)
 	}
 }
 
-func TestReadObjectErr(t *testing.T) {
+func TestOpenErr(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	}))
@@ -132,9 +192,10 @@ func TestReadObjectErr(t *testing.T) {
 	req, _ := testInstance.NewRequest("GET", "/", nil)
 	ctx := appengine.NewContext(req)
 	stor := &Storage{Base: ts.URL}
-	obj, err := stor.ReadFile(ctx, "bucket", "TestReadObjectErr")
+	obj, err := stor.OpenFile(ctx, "bucket", "TestOpenErr")
 	if err == nil {
-		t.Fatalf("stor.ReadFile: %+v; want error", obj)
+		defer obj.Body.Close()
+		t.Fatalf("stor.OpenFile: %+v; want error", obj)
 	}
 	errf, ok := err.(*FetchError)
 	if !ok {
