@@ -32,6 +32,8 @@ var objectHeaders = []string{
 	"content-type",
 	"etag",
 	"last-modified",
+	metaRedirect,
+	metaRedirectCode,
 }
 
 // Object represents a single GCS object.
