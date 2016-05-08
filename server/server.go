@@ -38,6 +38,11 @@ func init() {
 	}
 	http.HandleFunc(config.WebRoot, serveObject)
 	http.HandleFunc(config.HookPath, storage.HandleChangeHook)
+	http.HandleFunc("/_ah/warmup", handleWarmup)
+}
+
+func handleWarmup(w http.ResponseWriter, r *http.Request) {
+	// nothing to do here
 }
 
 // serveObject responds with a GCS object contents, preserving its original headers
