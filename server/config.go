@@ -19,6 +19,7 @@ import (
 	"os"
 
 	"github.com/google/weasel"
+	lru "github.com/hashicorp/golang-lru"
 )
 
 // configFile is the frontend server config file.
@@ -34,6 +35,10 @@ type appConfig struct {
 	// when the request host and path match a key.
 	// Map values must not end with "/" and cannot contain query string.
 	Redirects map[string]string `json:"redirects"`
+
+	// CacheSize is the size in bytes for an in-memory cache. A value of 0
+	// will result in no cache being created
+	CacheSize int `json:"cacheSize"`
 
 	// TLSOnly will force TLS connection for the specified host names.
 	TLSOnly []string `json:"tlsonly"`
@@ -70,6 +75,12 @@ func readConfig() error {
 	}
 	if config.GCSBase == "" {
 		config.GCSBase = weasel.DefaultStorage.Base
+	}
+	if config.CacheSize > 0 {
+		weasel.LocalCache, err = lru.NewARC(config.CacheSize)
+		if err != nil {
+			return err
+		}
 	}
 	config.tlsOnly = make(map[string]struct{})
 	for _, v := range config.TLSOnly {
