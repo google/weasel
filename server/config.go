@@ -19,7 +19,6 @@ import (
 	"os"
 
 	"github.com/google/weasel"
-	lru "github.com/hashicorp/golang-lru"
 )
 
 // configFile is the frontend server config file.
@@ -39,6 +38,12 @@ type appConfig struct {
 	// CacheSize is the size in bytes for an in-memory cache. A value of 0
 	// will result in no cache being created
 	CacheSize int `json:"cacheSize"`
+
+	// LocalCacheTTL is the maximum number of seconds an object will stay in local
+	// memory. This is necessary because purgeCache will only run
+	// on a single instance. If not set, defaults to 10 minutes.
+	// If you never want it to timeout, set to -1
+	LocalCacheTTL int `json:"localCacheTTL"`
 
 	// TLSOnly will force TLS connection for the specified host names.
 	TLSOnly []string `json:"tlsonly"`
@@ -76,11 +81,8 @@ func readConfig() error {
 	if config.GCSBase == "" {
 		config.GCSBase = weasel.DefaultStorage.Base
 	}
-	if config.CacheSize > 0 {
-		weasel.LocalCache, err = lru.NewARC(config.CacheSize)
-		if err != nil {
-			return err
-		}
+	if config.LocalCacheTTL == 0 {
+		config.LocalCacheTTL = 600
 	}
 	config.tlsOnly = make(map[string]struct{})
 	for _, v := range config.TLSOnly {

@@ -51,9 +51,6 @@ var DefaultStorage = &Storage{
 	},
 }
 
-// LocalCache is an optional in memory cache that is consulted before memcache
-var LocalCache *lru.ARCCache
-
 // CORS is a Storage cross-origin settings.
 type CORS struct {
 	Origin []string // allowed origins
@@ -62,9 +59,11 @@ type CORS struct {
 
 // Storage incapsulates configuration params for retrieveing and serving GCS objects.
 type Storage struct {
-	Base  string // GCS service base URL, e.g. "https://storage.googleapis.com".
-	Index string // Appended to an object name in certain cases, e.g. "index.html".
-	CORS  CORS
+	Base          string // GCS service base URL, e.g. "https://storage.googleapis.com".
+	Index         string // Appended to an object name in certain cases, e.g. "index.html".
+	CORS          CORS
+	LocalCache    *lru.ARCCache // LocalCache is an optional in memory cache that is consulted before memcache
+	LocalCacheTTL time.Duration
 }
 
 // OpenFile abstracts Open and treats object name like a file path.
