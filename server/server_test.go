@@ -15,6 +15,7 @@
 package server
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -67,6 +68,14 @@ func TestTLSOnly(t *testing.T) {
 	want := "https://example.com/page?foo=bar"
 	if l := w.Header().Get("location"); l != want {
 		t.Errorf("location = %q; want %q", l, want)
+	}
+
+	r, _ = testInstance.NewRequest("GET", "https://example.com/page?foo=bar", nil)
+	r.TLS = &tls.ConnectionState{} // make it seem like TLS
+	w = httptest.NewRecorder()
+	http.DefaultServeMux.ServeHTTP(w, r)
+	if w.Header().Get("strict-transport-security") == "" {
+		t.Errorf("missing STS header")
 	}
 }
 

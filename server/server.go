@@ -52,11 +52,15 @@ func handleWarmup(w http.ResponseWriter, r *http.Request) {
 //
 // Only GET, HEAD and OPTIONS methods are allowed.
 func serveObject(w http.ResponseWriter, r *http.Request) {
+	_, forceTLS := config.tlsOnly[r.Host]
+	if forceTLS && r.TLS != nil {
+		w.Header().Set("Strict-Transport-Security", "max-age=10886400; includeSubDomains; preload")
+	}
 	if !weasel.ValidMethod(r.Method) {
 		http.Error(w, "", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, force := config.tlsOnly[r.Host]; force && r.TLS == nil {
+	if forceTLS && r.TLS == nil {
 		u := "https://" + r.Host + r.URL.Path
 		if r.URL.RawQuery != "" {
 			u += "?" + r.URL.RawQuery
