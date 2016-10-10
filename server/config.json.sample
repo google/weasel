@@ -2,6 +2,7 @@
   "redirects": {
     "host/": "https://another.host"
   },
+  "cacheSize": 67108864,
   "tlsonly": [
     "another.host"
   ],

@@ -35,6 +35,16 @@ type appConfig struct {
 	// Map values must not end with "/" and cannot contain query string.
 	Redirects map[string]string `json:"redirects"`
 
+	// CacheSize is the size in bytes for an in-memory cache. A value of 0
+	// will result in no cache being created
+	CacheSize int `json:"cacheSize"`
+
+	// LocalCacheTTL is the maximum number of seconds an object will stay in local
+	// memory. This is necessary because purgeCache will only run
+	// on a single instance. If not set, defaults to 10 minutes.
+	// If you never want it to timeout, set to -1
+	LocalCacheTTL int `json:"localCacheTTL"`
+
 	// TLSOnly will force TLS connection for the specified host names.
 	TLSOnly []string `json:"tlsonly"`
 	// tlsOnly is an internal map created from TLSOnly config field.
@@ -70,6 +80,9 @@ func readConfig() error {
 	}
 	if config.GCSBase == "" {
 		config.GCSBase = weasel.DefaultStorage.Base
+	}
+	if config.LocalCacheTTL == 0 {
+		config.LocalCacheTTL = 600
 	}
 	config.tlsOnly = make(map[string]struct{})
 	for _, v := range config.TLSOnly {

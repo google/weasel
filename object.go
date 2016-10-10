@@ -94,6 +94,20 @@ func (b *objectBuf) Read(p []byte) (int, error) {
 			Object:     b,
 			Expiration: cacheItemExpiry,
 		}
+
+		if LocalCache != nil {
+			var cacheBytes []byte
+			copy(cacheBytes, b.Body)
+			cacheObj := objectBuf{
+				Body: cacheBytes,
+				Meta: make(map[string]string, len(b.Meta)),
+			}
+			for k, v := range b.Meta {
+				cacheObj.Meta[k] = v
+			}
+			LocalCache.Add(b.key, cacheObj)
+		}
+
 		if err := memcache.Gob.Set(b.ctx, &item); err != nil {
 			log.Errorf(b.ctx, "memcache.Gob.Set(%q): %v", b.key, err)
 		}

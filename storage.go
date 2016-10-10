@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/weasel/internal"
+	lru "github.com/hashicorp/golang-lru"
 
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
@@ -58,9 +59,11 @@ type CORS struct {
 
 // Storage incapsulates configuration params for retrieveing and serving GCS objects.
 type Storage struct {
-	Base  string // GCS service base URL, e.g. "https://storage.googleapis.com".
-	Index string // Appended to an object name in certain cases, e.g. "index.html".
-	CORS  CORS
+	Base          string // GCS service base URL, e.g. "https://storage.googleapis.com".
+	Index         string // Appended to an object name in certain cases, e.g. "index.html".
+	CORS          CORS
+	LocalCache    *lru.ARCCache // LocalCache is an optional in memory cache that is consulted before memcache
+	LocalCacheTTL time.Duration
 }
 
 // OpenFile abstracts Open and treats object name like a file path.
@@ -225,12 +228,26 @@ func fetch(ctx context.Context, url, cacheKey string) (*Object, error) {
 
 func getCache(ctx context.Context, key string) (*Object, error) {
 	var b objectBuf
-	if _, err := memcache.Gob.Get(ctx, key, &b); err != nil {
-		if err != memcache.ErrCacheMiss {
-			log.Errorf(ctx, "memcache.Gob.Get(%q): %v", key, err)
+	var found bool
+
+	if LocalCache != nil {
+		var obj interface{}
+		obj, found = LocalCache.Get(key)
+		if found {
+			b = obj.(objectBuf)
 		}
-		return nil, err
+		log.Debugf(ctx, "LocalCache hit: %s", key)
 	}
+
+	if !found {
+		if _, err := memcache.Gob.Get(ctx, key, &b); err != nil {
+			if err != memcache.ErrCacheMiss {
+				log.Errorf(ctx, "memcache.Gob.Get(%q): %v", key, err)
+			}
+			return nil, err
+		}
+	}
+
 	o := &Object{
 		Meta: b.Meta,
 		Body: ioutil.NopCloser(bytes.NewReader(b.Body)),
@@ -239,6 +256,10 @@ func getCache(ctx context.Context, key string) (*Object, error) {
 }
 
 func purgeCache(ctx context.Context, key string) error {
+	if LocalCache != nil {
+		LocalCache.Remove(key)
+	}
+
 	err := memcache.Delete(ctx, key)
 	if err == memcache.ErrCacheMiss {
 		err = nil

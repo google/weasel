@@ -21,6 +21,7 @@ import (
 	"golang.org/x/net/context"
 
 	"github.com/google/weasel"
+	lru "github.com/hashicorp/golang-lru"
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/log"
 )
@@ -35,6 +36,14 @@ func init() {
 	storage = &weasel.Storage{Base: config.GCSBase, Index: config.Index}
 	for host, redir := range config.Redirects {
 		http.Handle(host, redirectHandler(redir, http.StatusMovedPermanently))
+	}
+	if config.CacheSize > 0 {
+		storage.LocalCache, err = lru.NewARC(config.CacheSize)
+		if err != nil {
+			return err
+		}
+
+		storage.LocalCacheTTL = config.LocalCacheTTL * time.Second
 	}
 	http.HandleFunc(config.WebRoot, serveObject)
 	http.HandleFunc(config.HookPath, storage.HandleChangeHook)
