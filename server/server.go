@@ -161,7 +161,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := newContext(r)
+	ctx, cancel := context.WithTimeout(appengine.NewContext(r), 10*time.Second)
+	defer cancel()
 	bucket := s.bucketForHost(r.Host)
 	oname := r.URL.Path[1:]
 
@@ -212,12 +213,4 @@ func serveError(w http.ResponseWriter, code int, msg string) {
 	w.WriteHeader(code)
 	// TODO: render some template
 	w.Write([]byte(msg))
-}
-
-// newContext creates a new context from a client in-flight request.
-// It should not be used for server-to-server, such as web hooks.
-func newContext(r *http.Request) context.Context {
-	c := appengine.NewContext(r)
-	c, _ = context.WithTimeout(c, 10*time.Second)
-	return c
 }

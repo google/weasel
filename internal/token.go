@@ -1,3 +1,4 @@
+// Package internal contains utilities internal to the weasel packages.
 package internal
 
 import "golang.org/x/oauth2/google"
