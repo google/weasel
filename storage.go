@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package weasel provides means for serving content from a Google Cloud Storage (GCS)
+// bucket, suitable for hosting on Google App Engine.
+// See README.md for the design details.
+//
+// This package is a work in progress and makes no API stability promises.
 package weasel
 
 import (
@@ -34,11 +39,8 @@ import (
 	"google.golang.org/appengine/urlfetch"
 )
 
-// Google Cloud Storage OAuth2 scopes
-const (
-	scopeStorageRead  = "https://www.googleapis.com/auth/devstorage.read_only"
-	scopeStorageOwner = "https://www.googleapis.com/auth/devstorage.full_control"
-)
+// Google Cloud Storage OAuth2 scopes.
+const scopeStorageRead = "https://www.googleapis.com/auth/devstorage.read_only"
 
 // DefaultStorage is a Storage with sensible default parameters.
 var DefaultStorage = &Storage{

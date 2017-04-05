@@ -20,6 +20,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"google.golang.org/appengine"
+	"google.golang.org/appengine/memcache"
 )
 
 func TestServeRedirect(t *testing.T) {
@@ -115,5 +118,28 @@ func TestServeCrossPreflight(t *testing.T) {
 	want := "GET, HEAD, OPTIONS"
 	if v := w.Header().Get("access-control-allow-methods"); v != want {
 		t.Errorf("allow-methods: %q; want %q", v, want)
+	}
+}
+
+func TestHook(t *testing.T) {
+	var stor Storage
+	r, _ := testInstance.NewRequest("GET", "/", nil)
+	ctx := appengine.NewContext(r)
+	cacheKey := stor.CacheKey("dummy", "path/obj")
+	item := &memcache.Item{Key: cacheKey, Value: []byte("ignored")}
+	if err := memcache.Set(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"bucket": "dummy", "name": "path/obj"}`
+	req, _ := testInstance.NewRequest("POST", "/hook", strings.NewReader(body))
+	res := httptest.NewRecorder()
+	stor.HandleChangeHook(res, req)
+	if res.Code != http.StatusOK {
+		t.Errorf("res.Code = %d; want %d", res.Code, http.StatusOK)
+	}
+	// Must remove cached item.
+	if _, err := memcache.Get(ctx, cacheKey); err != memcache.ErrCacheMiss {
+		t.Fatalf("memcache.Get(%q): %v; want ErrCacheMiss", cacheKey, err)
 	}
 }

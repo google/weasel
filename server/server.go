@@ -12,6 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package server provides a simple frontend in form of an App Engine app
+// built atop the weasel.Storage.
+// See README.md for the design details.
+//
+// This package is a work in progress and makes no API stability promises.
+//
+// An exaple usage for App Engine Standard:
+//
+//    # app.yaml
+//    runtime: go
+//    api_version: go1
+//    handlers:
+//    - url: /.*
+//      script: _go_app
+//
+//    # app.go
+//    package app
+//
+//    import github.com/google/weasel
+//    import github.com/google/weasel/server
+//
+//    func init() {
+//      conf := &weasel.Config{
+//        Storage: weasel.DefaultStorage,
+//        Buckets: map[string]string{
+//          "default": "my-gcs-bucket",
+//        },
+//        HookPath: "/-/flush-gcs-cache",
+//      }
+//      server.Init(nil, conf)
+//    }
+//
+// The "/-/flush-gcs-cache" needs to be hooked up with "my-gcs-bucket" manually
+// using Object Change Notifications. See the following page for more details:
+// https://cloud.google.com/storage/docs/object-change-notification
 package server
 
 import (
@@ -25,36 +60,93 @@ import (
 	"google.golang.org/appengine/log"
 )
 
-// storage is used by the weasel server to serve GCS objects.
-var storage *weasel.Storage
+// Used to set STS header value when serving over TLS.
+const stsValue = "max-age=10886400; includeSubDomains; preload"
 
-func init() {
-	if err := readConfig(); err != nil {
-		panic(err)
+// Init registers server handlers on the provided mux.
+// If the mux argument is nil, http.DefaultServeMux is used.
+//
+// See package doc for a usage example.
+func Init(mux *http.ServeMux, conf *Config) {
+	if mux == nil {
+		mux = http.DefaultServeMux
 	}
-	storage = &weasel.Storage{Base: config.GCSBase, Index: config.Index}
-	for host, redir := range config.Redirects {
-		http.Handle(host, redirectHandler(redir, http.StatusMovedPermanently))
+	for host, redir := range conf.Redirects {
+		mux.Handle(host, redirectHandler(redir, http.StatusMovedPermanently))
 	}
-	http.HandleFunc(config.WebRoot, serveObject)
-	http.HandleFunc(config.HookPath, storage.HandleChangeHook)
-	http.HandleFunc("/_ah/warmup", handleWarmup)
+	s := &server{
+		storage: conf.Storage,
+		buckets: conf.Buckets,
+		tlsOnly: make(map[string]struct{}, len(conf.TLSOnly)),
+	}
+	for _, h := range conf.TLSOnly {
+		s.tlsOnly[h] = struct{}{}
+	}
+	mux.Handle(conf.webroot(), s)
+	if conf.HookPath != "" {
+		mux.HandleFunc(conf.HookPath, conf.Storage.HandleChangeHook)
+	}
 }
 
-func handleWarmup(w http.ResponseWriter, r *http.Request) {
-	// nothing to do here
+// Config is used to init the server.
+// See Init for more details.
+type Config struct {
+	// Storage provides server with the content access.
+	Storage *weasel.Storage
+
+	// Buckets defines a mapping between hosts
+	// and GCS buckets the responses should be served from.
+	// The map must contain at least "default" key.
+	Buckets map[string]string
+
+	// WebRoot is the content serving root pattern.
+	// If empty, default is used.
+	// Default value is "/".
+	WebRoot string
+
+	// GCS object change notification hook pattern.
+	// If empty, no hook handler will be setup during Init.
+	HookPath string
+
+	// Redirects is a map of URLs the app will permanently redirect to
+	// when the request host and path match a key.
+	// Map values must not end with "/" and cannot contain query string.
+	Redirects map[string]string
+
+	// TLSOnly forces TLS connection for the specified host names.
+	TLSOnly []string
 }
 
-// serveObject responds with a GCS object contents, preserving its original headers
+func (c *Config) webroot() string {
+	if c.WebRoot != "" {
+		return c.WebRoot
+	}
+	return "/"
+}
+
+type server struct {
+	// The GCS storage to serve content from.
+	storage *weasel.Storage
+
+	// Contains hostnames forced to be server over TLS.
+	tlsOnly map[string]struct{}
+
+	// Defines a mapping between hosts
+	// and GCS buckets the responses should be served from.
+	// The map must contain at least "default" key.
+	buckets map[string]string
+}
+
+// ServeHTTP responds with a GCS object contents, preserving its original headers
 // listed in objectHeaders.
 // The bucket is identifed by matching r.Host against config.Buckets map keys.
 // Default bucket is used if no match is found.
 //
 // Only GET, HEAD and OPTIONS methods are allowed.
-func serveObject(w http.ResponseWriter, r *http.Request) {
-	_, forceTLS := config.tlsOnly[r.Host]
+func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	_, forceTLS := s.tlsOnly[r.Host]
 	if forceTLS && r.TLS != nil {
-		w.Header().Set("Strict-Transport-Security", "max-age=10886400; includeSubDomains; preload")
+		w.Header().Set("Strict-Transport-Security", stsValue)
 	}
 	if !weasel.ValidMethod(r.Method) {
 		http.Error(w, "", http.StatusMethodNotAllowed)
@@ -70,10 +162,10 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := newContext(r)
-	bucket := bucketForHost(r.Host)
+	bucket := s.bucketForHost(r.Host)
 	oname := r.URL.Path[1:]
 
-	o, err := storage.OpenFile(ctx, bucket, oname)
+	o, err := s.storage.OpenFile(ctx, bucket, oname)
 	if err != nil {
 		code := http.StatusInternalServerError
 		if errf, ok := err.(*weasel.FetchError); ok {
@@ -85,15 +177,25 @@ func serveObject(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if err := storage.ServeObject(w, r, o); err != nil {
+	if err := s.storage.ServeObject(w, r, o); err != nil {
 		log.Errorf(ctx, "%s/%s: %v", bucket, oname, err)
 	}
 	o.Body.Close()
 }
 
+// bucketForHost returns a bucket name mapped to the host.
+// Default bucket name is return if no match found.
+func (s *server) bucketForHost(host string) string {
+	if b, ok := s.buckets[host]; ok {
+		return b
+	}
+	return s.buckets["default"]
+}
+
 // redirectHandler creates a new handler which redirects all requests
 // to the specified url, preserving original path and raw query.
 func redirectHandler(url string, code int) http.Handler {
+	// TODO: parse url and support path, query, etc.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u := url + r.URL.Path
 		if r.URL.RawQuery != "" {
@@ -110,15 +212,6 @@ func serveError(w http.ResponseWriter, code int, msg string) {
 	w.WriteHeader(code)
 	// TODO: render some template
 	w.Write([]byte(msg))
-}
-
-// bucketForHost returns a bucket name mapped to the host.
-// Default bucket name is return if no match found.
-func bucketForHost(host string) string {
-	if b, ok := config.Buckets[host]; ok {
-		return b
-	}
-	return config.Buckets["default"]
 }
 
 // newContext creates a new context from a client in-flight request.

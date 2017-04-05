@@ -52,12 +52,9 @@ Weasel enhancement consists of modifying the serving path to:
    requested file by using `Link: <asset>; rel=preload` header supported
    by GFE.
 
-## dev flow
 
-Just use `goapp` tool provided with the
-[Google Appengine SDK for Go](https://cloud.google.com/appengine/downloads).
+## license
 
-Assuming the SDK is installed in `$SDK_DIR`:
+Apache License 2.0.
 
-- `goapp test` runs tests
-- `goapp deploy` deploys the app to App Engine production servers.
+This is not an official Google product.

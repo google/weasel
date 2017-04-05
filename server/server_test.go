@@ -21,13 +21,42 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/weasel"
+
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/memcache"
 )
 
-func TestServerConfig(t *testing.T) {
-	if b := config.Buckets["default"]; b == "" {
-		t.Errorf("want default bucket in %+v", config)
+func TestInit(t *testing.T) {
+	Init(nil, &Config{
+		WebRoot:   "/root/",
+		HookPath:  "/flush-cache",
+		Redirects: map[string]string{"example.org/": "redir.host"},
+		TLSOnly:   []string{"tls.example.org"},
+	})
+	patterns := []struct{ in, out string }{
+		{"/", ""},
+		{"/root", "/root/"},
+		{"/root/", "/root/"},
+		{"/root/foo", "/root/"},
+		{"/flush-cache", "/flush-cache"},
+		{"http://example.org/", "example.org/"},
+	}
+	for i, p := range patterns {
+		r, err := http.NewRequest("GET", p.in, nil)
+		if err != nil {
+			t.Errorf("%d: NewRequest(%q): %v", i, p.in, err)
+			continue
+		}
+		if _, v := http.DefaultServeMux.Handler(r); v != p.out {
+			t.Errorf("%d: Handler(%q) = %q; want %q", i, p.in, v, p.out)
+		}
+	}
+	r, _ := testInstance.NewRequest("GET", "http://tls.example.org/root/", nil)
+	w := httptest.NewRecorder()
+	http.DefaultServeMux.ServeHTTP(w, r)
+	if w.Code != http.StatusMovedPermanently {
+		t.Errorf("w.Code = %d; want %d", w.Code, http.StatusMovedPermanently)
 	}
 }
 
@@ -58,10 +87,13 @@ func TestRedirect(t *testing.T) {
 }
 
 func TestTLSOnly(t *testing.T) {
-	config.tlsOnly = map[string]struct{}{"example.com": {}}
+	srv := &server{
+		storage: &weasel.Storage{},
+		tlsOnly: map[string]struct{}{"example.com": {}},
+	}
 	r, _ := testInstance.NewRequest("GET", "http://example.com/page?foo=bar", nil)
 	w := httptest.NewRecorder()
-	http.DefaultServeMux.ServeHTTP(w, r)
+	srv.ServeHTTP(w, r)
 	if w.Code != http.StatusMovedPermanently {
 		t.Errorf("w.Code = %d; want %d", w.Code, http.StatusMovedPermanently)
 	}
@@ -73,9 +105,9 @@ func TestTLSOnly(t *testing.T) {
 	r, _ = testInstance.NewRequest("GET", "https://example.com/page?foo=bar", nil)
 	r.TLS = &tls.ConnectionState{} // make it seem like TLS
 	w = httptest.NewRecorder()
-	http.DefaultServeMux.ServeHTTP(w, r)
-	if w.Header().Get("strict-transport-security") == "" {
-		t.Errorf("missing STS header")
+	srv.ServeHTTP(w, r)
+	if v := w.Header().Get("strict-transport-security"); v != stsValue {
+		t.Errorf("strict-transport-security: %q; want %q", v, stsValue)
 	}
 }
 
@@ -111,8 +143,13 @@ func TestServe_DefaultGCS(t *testing.T) {
 		w.Write([]byte(contents))
 	}))
 	defer ts.Close()
-	storage.Base = ts.URL
-	config.Buckets = map[string]string{"default": bucket}
+	srv := &server{
+		storage: &weasel.Storage{
+			Base:  ts.URL,
+			Index: "index.html",
+		},
+		buckets: map[string]string{"default": bucket},
+	}
 
 	req, _ := testInstance.NewRequest("GET", reqFile, nil)
 	req.Header.Set("accept-encoding", "client/accept")
@@ -123,7 +160,7 @@ func TestServe_DefaultGCS(t *testing.T) {
 	}
 
 	res := httptest.NewRecorder()
-	http.DefaultServeMux.ServeHTTP(res, req)
+	srv.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
 		t.Errorf("res.Code = %d; want %d", res.Code, http.StatusOK)
 	}
@@ -147,8 +184,10 @@ func TestServe_Methods(t *testing.T) {
 		w.Write([]byte("methods test"))
 	}))
 	defer ts.Close()
-	storage.Base = ts.URL
-	config.Buckets = map[string]string{"default": "bucket"}
+	srv := &server{
+		storage: &weasel.Storage{Base: ts.URL},
+		buckets: map[string]string{"default": "bucket"},
+	}
 
 	tests := []struct {
 		method, body string
@@ -167,7 +206,7 @@ func TestServe_Methods(t *testing.T) {
 	for i, test := range tests {
 		r, _ := testInstance.NewRequest(test.method, "/file.txt", nil)
 		rw := httptest.NewRecorder()
-		http.DefaultServeMux.ServeHTTP(rw, r)
+		srv.ServeHTTP(rw, r)
 		if rw.Code != test.code {
 			t.Errorf("%d: rw.Code = %d; want %d", i, rw.Code, test.code)
 		}
@@ -183,14 +222,17 @@ func TestServe_GCSErrors(t *testing.T) {
 		w.WriteHeader(code)
 	}))
 	defer ts.Close()
-	storage.Base = ts.URL
+	srv := &server{
+		storage: &weasel.Storage{Base: ts.URL},
+		buckets: map[string]string{"default": "bucket"},
+	}
 
 	req, err := testInstance.NewRequest("GET", "/bad", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	res := httptest.NewRecorder()
-	http.DefaultServeMux.ServeHTTP(res, req)
+	srv.ServeHTTP(res, req)
 	if res.Code != code {
 		t.Errorf("res.Code = %d; want %d", res.Code, code)
 	}
@@ -208,8 +250,13 @@ func TestServe_NoTrailSlash(t *testing.T) {
 		}
 	}))
 	defer ts.Close()
-	storage.Base = ts.URL
-	config.Buckets = map[string]string{"default": "bucket"}
+	srv := &server{
+		storage: &weasel.Storage{
+			Base:  ts.URL,
+			Index: "index.html",
+		},
+		buckets: map[string]string{"default": "bucket"},
+	}
 
 	req, _ := testInstance.NewRequest("GET", "/dir-one/two", nil)
 	// make sure we're not getting memcached results
@@ -217,41 +264,12 @@ func TestServe_NoTrailSlash(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := httptest.NewRecorder()
-	http.DefaultServeMux.ServeHTTP(res, req)
+	srv.ServeHTTP(res, req)
 	if res.Code != http.StatusMovedPermanently {
 		t.Errorf("res.Code = %d; want %d", res.Code, http.StatusMovedPermanently)
 	}
 	loc := "/dir-one/two/"
 	if v := res.Header().Get("location"); v != loc {
 		t.Errorf("location = %q; want %q", v, loc)
-	}
-}
-
-func TestHook(t *testing.T) {
-	body := `{"bucket": "dummy", "name": "path/obj"}`
-	cacheKey := storage.CacheKey("dummy", "path/obj")
-	req, _ := testInstance.NewRequest("POST", "/-/hook/gcs", strings.NewReader(body))
-	ctx := appengine.NewContext(req)
-	item := &memcache.Item{Key: cacheKey, Value: []byte("ignored")}
-	if err := memcache.Set(ctx, item); err != nil {
-		t.Fatal(err)
-	}
-
-	// must remove cached item
-	res := httptest.NewRecorder()
-	http.DefaultServeMux.ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
-		t.Errorf("res.Code = %d; want %d", res.Code, http.StatusOK)
-	}
-	if _, err := memcache.Get(ctx, cacheKey); err != memcache.ErrCacheMiss {
-		t.Fatalf("memcache.Get(%q): %v; want ErrCacheMiss", cacheKey, err)
-	}
-
-	// cache misses must not respond with an error code
-	req, _ = testInstance.NewRequest("POST", "/-/hook/gcs", strings.NewReader(body))
-	res = httptest.NewRecorder()
-	http.DefaultServeMux.ServeHTTP(res, req)
-	if res.Code != http.StatusOK {
-		t.Errorf("res.Code = %d; want %d", res.Code, http.StatusOK)
 	}
 }
