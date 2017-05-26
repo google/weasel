@@ -64,10 +64,18 @@ func TestOpenFileIndex(t *testing.T) {
 	}
 }
 
-func TestOpenFileNoTrailSlash(t *testing.T) {
+func TestOpenFileNoTrailSlash_404(t *testing.T) {
+	testOpenFileNoTrailSlash(t, http.StatusNotFound)
+}
+
+func TestOpenFileNoTrailSlash_403(t *testing.T) {
+	testOpenFileNoTrailSlash(t, http.StatusForbidden)
+}
+
+func testOpenFileNoTrailSlash(t *testing.T, status int) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/bucket/no/slash/index.html" {
-			w.WriteHeader(http.StatusNotFound)
+			w.WriteHeader(status)
 			return
 		}
 		// stat request

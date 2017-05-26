@@ -92,8 +92,10 @@ func (s *Storage) OpenFile(ctx context.Context, bucket, name string) (*Object, e
 	if err == nil || !checkStat {
 		return o, err
 	}
-	// return non-404 errors right away, even when checkStat == true
-	if ferr, ok := err.(*FetchError); ok && ferr.Code != http.StatusNotFound {
+	// Return non-404 errors right away, even when checkStat == true.
+	// Note that GCS now may respond with 403 Forbidden
+	// for nonexistent objects.
+	if ferr, ok := err.(*FetchError); ok && ferr.Code != 404 && ferr.Code != 403 {
 		return nil, err
 	}
 
