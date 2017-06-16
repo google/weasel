@@ -30,11 +30,13 @@
 //    # app.go
 //    package app
 //
-//    import github.com/google/weasel
-//    import github.com/google/weasel/server
+//    import (
+//      "github.com/google/weasel"
+//      "github.com/google/weasel/server"
+//    )
 //
 //    func init() {
-//      conf := &weasel.Config{
+//      conf := &server.Config{
 //        Storage: weasel.DefaultStorage,
 //        Buckets: map[string]string{
 //          "default": "my-gcs-bucket",
