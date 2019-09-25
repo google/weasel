@@ -154,7 +154,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusMethodNotAllowed)
 		return
 	}
-	if forceTLS && r.TLS == nil {
+	if forceTLS && r.Header.Get("X-Forwarded-Proto") == "http" {
 		u := "https://" + r.Host + r.URL.Path
 		if r.URL.RawQuery != "" {
 			u += "?" + r.URL.RawQuery
