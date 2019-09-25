@@ -147,7 +147,7 @@ type server struct {
 // Only GET, HEAD and OPTIONS methods are allowed.
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, forceTLS := s.tlsOnly[r.Host]
-	if forceTLS && r.TLS != nil {
+	if forceTLS && r.Header.Get("X-Forwarded-Proto") == "https" {
 		w.Header().Set("Strict-Transport-Security", stsValue)
 	}
 	if !weasel.ValidMethod(r.Method) {

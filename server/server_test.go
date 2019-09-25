@@ -15,7 +15,6 @@
 package server
 
 import (
-	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -53,6 +52,7 @@ func TestInit(t *testing.T) {
 		}
 	}
 	r, _ := testInstance.NewRequest("GET", "http://tls.example.org/root/", nil)
+	r.Header.Set("X-Forwarded-Proto", "http")
 	w := httptest.NewRecorder()
 	http.DefaultServeMux.ServeHTTP(w, r)
 	if w.Code != http.StatusMovedPermanently {
@@ -87,11 +87,16 @@ func TestRedirect(t *testing.T) {
 }
 
 func TestTLSOnly(t *testing.T) {
+	gcs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// empty 200 OK response
+	}))
+	defer gcs.Close()
 	srv := &server{
-		storage: &weasel.Storage{},
+		storage: &weasel.Storage{Base: gcs.URL},
 		tlsOnly: map[string]struct{}{"example.com": {}},
 	}
 	r, _ := testInstance.NewRequest("GET", "http://example.com/page?foo=bar", nil)
+	r.Header.Set("X-Forwarded-Proto", "http")
 	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, r)
 	if w.Code != http.StatusMovedPermanently {
@@ -103,7 +108,7 @@ func TestTLSOnly(t *testing.T) {
 	}
 
 	r, _ = testInstance.NewRequest("GET", "https://example.com/page?foo=bar", nil)
-	r.TLS = &tls.ConnectionState{} // make it seem like TLS
+	r.Header.Set("X-Forwarded-Proto", "https")
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, r)
 	if v := w.Header().Get("strict-transport-security"); v != stsValue {
