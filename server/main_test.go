@@ -15,6 +15,7 @@
 package server
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
@@ -23,7 +24,6 @@ import (
 
 	"github.com/google/weasel/internal"
 
-	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"google.golang.org/appengine/aetest"
 )

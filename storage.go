@@ -21,6 +21,7 @@ package weasel
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -31,9 +32,7 @@ import (
 
 	"github.com/google/weasel/internal"
 
-	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
-
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/memcache"
 	"google.golang.org/appengine/urlfetch"

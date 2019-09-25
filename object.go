@@ -16,6 +16,7 @@ package weasel
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"strconv"
@@ -23,8 +24,6 @@ import (
 
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/memcache"
-
-	"golang.org/x/net/context"
 )
 
 const (
