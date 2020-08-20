@@ -18,7 +18,7 @@
 //
 // This package is a work in progress and makes no API stability promises.
 //
-// An exaple usage for App Engine Standard:
+// An example usage for App Engine Standard:
 //
 //    # app.yaml
 //    runtime: go
@@ -57,13 +57,17 @@ import (
 	"time"
 
 	"github.com/google/weasel"
+	"google.golang.org/appengine/log"
 
 	"google.golang.org/appengine"
-	"google.golang.org/appengine/log"
 )
 
 // Used to set STS header value when serving over TLS.
 const stsValue = "max-age=10886400; includeSubDomains; preload"
+
+// KeyPathFn is a function that determines the lookup key that maps to
+// the appropriate bucket and the adjusted file path from a HTTP request
+type KeyPathFn func(r *http.Request) (bucketKey, filePath string)
 
 // Init registers server handlers on the provided mux.
 // If the mux argument is nil, http.DefaultServeMux is used.
@@ -79,11 +83,21 @@ func Init(mux *http.ServeMux, conf *Config) {
 	s := &server{
 		storage: conf.Storage,
 		buckets: conf.Buckets,
+		keyPathFn: conf.KeyPathFn,
 		tlsOnly: make(map[string]struct{}, len(conf.TLSOnly)),
 	}
 	for _, h := range conf.TLSOnly {
 		s.tlsOnly[h] = struct{}{}
 	}
+
+	// if not set, set the KeyPathFn to a default function that returns
+	// the `host` header as the key and the relative path
+	if s.keyPathFn == nil {
+		s.keyPathFn = func(r *http.Request) (string, string) {
+			return r.Host, r.URL.Path[1:]
+		}
+	}
+
 	mux.Handle(conf.webroot(), s)
 	if conf.HookPath != "" {
 		mux.HandleFunc(conf.HookPath, conf.Storage.HandleChangeHook)
@@ -96,10 +110,16 @@ type Config struct {
 	// Storage provides server with the content access.
 	Storage *weasel.Storage
 
-	// Buckets defines a mapping between hosts
+	// Buckets defines a mapping between a request attribute
 	// and GCS buckets the responses should be served from.
 	// The map must contain at least "default" key.
 	Buckets map[string]string
+
+	// KeyPathFn is a function that returns the appropriate key
+	// that maps to a bucket and file path for a HTTP request.
+	// Default is a function that returns the `host` HTTP header as
+	// a bucket key and the relative path.
+	KeyPathFn KeyPathFn
 
 	// WebRoot is the content serving root pattern.
 	// If empty, default is used.
@@ -133,16 +153,20 @@ type server struct {
 	// Contains hostnames forced to be server over TLS.
 	tlsOnly map[string]struct{}
 
-	// Defines a mapping between hosts
+	// Defines a mapping between keys
 	// and GCS buckets the responses should be served from.
 	// The map must contain at least "default" key.
 	buckets map[string]string
+
+	// keyPathFn is a function that returns the appropriate key
+	// that maps to a bucket and file path for a HTTP request.
+	keyPathFn KeyPathFn
 }
 
 // ServeHTTP responds with a GCS object contents, preserving its original headers
 // listed in objectHeaders.
-// The bucket is identifed by matching r.Host against config.Buckets map keys.
-// Default bucket is used if no match is found.
+// The backend bucket is determined by doing a lookup of the key returned by
+// s.keyPathFn(). Default bucket is used if no match is found.
 //
 // Only GET, HEAD and OPTIONS methods are allowed.
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -165,8 +189,9 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(appengine.NewContext(r), 10*time.Second)
 	defer cancel()
-	bucket := s.bucketForHost(r.Host)
-	oname := r.URL.Path[1:]
+
+	bucketKey, oname := s.keyPathFn(r)
+	bucket := s.bucketLookup(bucketKey)
 
 	o, err := s.storage.OpenFile(ctx, bucket, oname)
 	if err != nil {
@@ -186,10 +211,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	o.Body.Close()
 }
 
-// bucketForHost returns a bucket name mapped to the host.
-// Default bucket name is return if no match found.
-func (s *server) bucketForHost(host string) string {
-	if b, ok := s.buckets[host]; ok {
+// bucketLookup returns a bucket name mapped to the provided key.
+// Default bucket name is returned if no match is found.
+func (s *server) bucketLookup(key string) string {
+	if b, ok := s.buckets[key]; ok {
 		return b
 	}
 	return s.buckets["default"]
