@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/weasel/internal"
+	"github.com/pehowell/weasel/internal"
 
 	"golang.org/x/oauth2"
 	"google.golang.org/appengine/aetest"
