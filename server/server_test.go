@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/weasel"
+	"github.com/pehowell/weasel"
 
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/memcache"

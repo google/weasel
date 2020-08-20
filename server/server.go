@@ -56,7 +56,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/weasel"
+	"github.com/pehowell/weasel"
 	"google.golang.org/appengine/log"
 
 	"google.golang.org/appengine"
