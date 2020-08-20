@@ -1,4 +1,4 @@
-module github.com/google/weasel
+module github.com/pehowell/weasel
 
 go 1.13
 
