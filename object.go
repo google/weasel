@@ -33,7 +33,7 @@ const (
 
 	// memcache settings
 	cacheItemMax    = 1 << 20 // max size per item, in bytes
-	cacheItemExpiry = 24 * time.Hour
+	cacheItemExpiry = 5 * time.Minute
 )
 
 // objectHeaders is a slice of headers propagated from a GCS object.
