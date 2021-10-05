@@ -33,9 +33,9 @@ import (
 	"github.com/pehowell/weasel/internal"
 
 	"golang.org/x/oauth2"
-	"google.golang.org/appengine/log"
-	"google.golang.org/appengine/memcache"
-	"google.golang.org/appengine/urlfetch"
+	"google.golang.org/appengine/v2/log"
+	"google.golang.org/appengine/v2/memcache"
+	"google.golang.org/appengine/v2/urlfetch"
 )
 
 // Google Cloud Storage OAuth2 scopes.

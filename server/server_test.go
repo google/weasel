@@ -22,8 +22,8 @@ import (
 
 	"github.com/pehowell/weasel"
 
-	"google.golang.org/appengine"
-	"google.golang.org/appengine/memcache"
+	"google.golang.org/appengine/v2"
+	"google.golang.org/appengine/v2/memcache"
 )
 
 func TestInit(t *testing.T) {

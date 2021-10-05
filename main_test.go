@@ -25,7 +25,7 @@ import (
 	"github.com/pehowell/weasel/internal"
 
 	"golang.org/x/oauth2"
-	"google.golang.org/appengine/aetest"
+	"google.golang.org/appengine/v2/aetest"
 )
 
 // global App Engine test instance, initialized and shutdown in TestMain.

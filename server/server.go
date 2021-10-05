@@ -57,9 +57,9 @@ import (
 	"time"
 
 	"github.com/pehowell/weasel"
-	"google.golang.org/appengine/log"
 
-	"google.golang.org/appengine"
+	"google.golang.org/appengine/v2"
+	"google.golang.org/appengine/v2/log"
 )
 
 // Used to set STS header value when serving over TLS.
@@ -81,10 +81,10 @@ func Init(mux *http.ServeMux, conf *Config) {
 		mux.Handle(host, redirectHandler(redir, http.StatusMovedPermanently))
 	}
 	s := &server{
-		storage: conf.Storage,
-		buckets: conf.Buckets,
+		storage:   conf.Storage,
+		buckets:   conf.Buckets,
 		keyPathFn: conf.KeyPathFn,
-		tlsOnly: make(map[string]struct{}, len(conf.TLSOnly)),
+		tlsOnly:   make(map[string]struct{}, len(conf.TLSOnly)),
 	}
 	for _, h := range conf.TLSOnly {
 		s.tlsOnly[h] = struct{}{}

@@ -22,8 +22,8 @@ import (
 	"strconv"
 	"time"
 
-	"google.golang.org/appengine/log"
-	"google.golang.org/appengine/memcache"
+	"google.golang.org/appengine/v2/log"
+	"google.golang.org/appengine/v2/memcache"
 )
 
 const (
